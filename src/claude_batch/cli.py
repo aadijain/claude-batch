@@ -1,0 +1,97 @@
+"""Command-line entry point. Resolves a task + model preset + flags, runs the batch."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+
+from .config import PRESETS, builtin_tasks, load_task, resolve_settings
+from .runner import run_batch
+
+
+def _parse_col(pairs: list[str]) -> dict[str, str]:
+    """Turn repeated --col var=spec into {var: spec}."""
+    out: dict[str, str] = {}
+    for p in pairs:
+        if "=" not in p:
+            raise SystemExit(f"--col expects var=column, got '{p}'.")
+        var, _, spec = p.partition("=")
+        var = var.strip()
+        if not var:
+            raise SystemExit(f"--col expects var=column, got '{p}'.")
+        out[var] = spec.strip()
+    return out
+
+
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(
+        prog="claude-batch",
+        description="Run a task over the rows of a CSV via claude -p (headless Claude Code).",
+    )
+    ap.add_argument("--input", help="input CSV path")
+    ap.add_argument("--output", help="output CSV path")
+    ap.add_argument("--task", default=None, help="built-in task name or path to a task .toml")
+    ap.add_argument(
+        "--col",
+        action="append",
+        default=[],
+        metavar="VAR=COL",
+        help="map a task template variable to a CSV column (0-based index or header name); repeatable",
+    )
+    ap.add_argument("--has-header", action="store_true", help="treat the first row as a header")
+
+    ap.add_argument(
+        "--preset",
+        choices=sorted(PRESETS),
+        default=None,
+        help=f"model tier (default: fast). Available: {', '.join(sorted(PRESETS))}",
+    )
+    ap.add_argument("--model", default=None, help="override the preset's claude-code model alias")
+    ap.add_argument(
+        "--concurrency", type=int, default=None, help="override parallel claude -p calls (1-2 on Pro)"
+    )
+
+    ap.add_argument("--limit", type=int, default=None, help="process at most N rows (trial runs)")
+    ap.add_argument("--keep-html", action="store_true", help="keep HTML tags in input cells (default: strip)")
+    ap.add_argument(
+        "--checkpoint", default=None, help="JSONL checkpoint path (default: <output>.checkpoint.jsonl)"
+    )
+    ap.add_argument("--list-tasks", action="store_true", help="list built-in tasks and exit")
+    return ap
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
+
+    if args.list_tasks:
+        tasks = builtin_tasks()
+        if not tasks:
+            print("No built-in tasks found.")
+            return
+        for name in tasks:
+            task = load_task(name)
+            print(f"{name:16} {task.description}")
+        return
+
+    missing = [f"--{k}" for k in ("input", "output", "task") if getattr(args, k) is None]
+    if missing:
+        print(f"Missing required arguments: {', '.join(missing)}", file=sys.stderr)
+        raise SystemExit(2)
+
+    task = load_task(args.task)
+    settings = resolve_settings(args.preset, model=args.model, concurrency=args.concurrency)
+    run_batch(
+        input_path=args.input,
+        output_path=args.output,
+        task=task,
+        col_map=_parse_col(args.col),
+        settings=settings,
+        has_header=args.has_header,
+        limit=args.limit,
+        keep_html=args.keep_html,
+        checkpoint_path=args.checkpoint,
+    )
+
+
+if __name__ == "__main__":
+    main()
