@@ -1,0 +1,17 @@
+name = "jp-translate"
+description = "Translate a Japanese sentence closely for a learner, plus learner notes."
+
+# Per-row user prompt. `{source}` is the Japanese line; `{context}` is an optional
+# English subtitle used only to disambiguate. When `{context}` is empty its line
+# is dropped automatically.
+prompt_template = """
+Translate this line: {source}
+
+English subtitle (context only, do not copy or defer to it): {context}
+"""
+
+# Two output columns split by the sentinel below: a close translation, then notes.
+output_columns = ["translation", "notes"]
+sentinel = "---NOTES---"
+
+system_prompt_file = "jp-translate.system.md"
