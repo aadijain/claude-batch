@@ -6,7 +6,7 @@ import argparse
 import sys
 
 from .config import PRESETS, builtin_tasks, load_task, resolve_settings
-from .runner import run_batch
+from .runner import print_status, run_batch
 
 
 def _parse_col(pairs: list[str]) -> dict[str, str]:
@@ -62,6 +62,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--checkpoint", default=None, help="JSONL checkpoint path (default: <output>.checkpoint.jsonl)"
     )
     ap.add_argument("--list-tasks", action="store_true", help="list built-in tasks and exit")
+    ap.add_argument(
+        "--status",
+        action="store_true",
+        help="print checkpoint progress for --output (or --checkpoint) and exit; no run",
+    )
     return ap
 
 
@@ -76,6 +81,19 @@ def main(argv: list[str] | None = None) -> None:
         for name in tasks:
             task = load_task(name)
             print(f"{name:16} {task.description}")
+        return
+
+    if args.status:
+        if args.output is None and args.checkpoint is None:
+            print("--status needs --output (or --checkpoint) to locate the checkpoint.", file=sys.stderr)
+            raise SystemExit(2)
+        print_status(
+            output_path=args.output,
+            checkpoint_path=args.checkpoint,
+            input_path=args.input,
+            has_header=args.has_header,
+            limit=args.limit,
+        )
         return
 
     missing = [f"--{k}" for k in ("input", "output", "task") if getattr(args, k) is None]

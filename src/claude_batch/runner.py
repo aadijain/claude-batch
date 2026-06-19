@@ -38,6 +38,44 @@ def append_checkpoint(path: str, rec: dict, lock: threading.Lock) -> None:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
+def print_status(
+    *,
+    output_path: str,
+    checkpoint_path: str | None = None,
+    input_path: str | None = None,
+    has_header: bool = False,
+    limit: int | None = None,
+) -> None:
+    """Read-only progress report from the checkpoint. Safe to run against a live
+    run in another terminal: the checkpoint is the durable source of truth."""
+    checkpoint_path = checkpoint_path or (output_path + ".checkpoint.jsonl")
+    if not os.path.exists(checkpoint_path):
+        print(f"No checkpoint at {checkpoint_path} (run not started, or nothing done yet).")
+        return
+
+    done = load_checkpoint(checkpoint_path)
+    errors = sum(1 for r in done.values() if r.get("error"))
+    cost = sum(float(r.get("cost") or 0.0) for r in done.values())
+    ok = len(done) - errors
+
+    total: int | None = None
+    if input_path and os.path.exists(input_path):
+        with open(input_path, newline="", encoding="utf-8") as f:
+            rows = list(csv.reader(f))
+        data_rows = rows[1:] if has_header else rows
+        total = len(data_rows) if limit is None else min(limit, len(data_rows))
+
+    print(f"Checkpoint: {checkpoint_path}")
+    if total is not None:
+        remaining = max(0, total - len(done))
+        pct = (len(done) / total * 100) if total else 0.0
+        print(f"Progress:   {len(done)}/{total} rows ({pct:.0f}%), {remaining} remaining")
+    else:
+        print(f"Progress:   {len(done)} rows recorded (pass --input for a total)")
+    print(f"Results:    {ok} ok, {errors} errors")
+    print(f"Cost:       ${cost:.4f} (reported API cost; $0 if drawn from a subscription)")
+
+
 # --- CSV helpers ------------------------------------------------------------
 def resolve_col(spec: str, header: list[str] | None) -> int:
     if spec.isdigit():

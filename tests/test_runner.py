@@ -3,7 +3,7 @@ import pytest
 from claude_batch import client
 from claude_batch.client import LimitReached, run_with_retries
 from claude_batch.config import Task
-from claude_batch.runner import load_checkpoint, resolve_col, resolve_col_map
+from claude_batch.runner import load_checkpoint, print_status, resolve_col, resolve_col_map
 
 
 def _task(template, cols=("out",)):
@@ -90,3 +90,25 @@ def test_load_checkpoint_roundtrip(tmp_path):
     done = load_checkpoint(str(ckpt))
     assert set(done) == {0, 2}
     assert done[0]["fields"]["out"] == "hi"
+
+
+def test_print_status_no_checkpoint(tmp_path, capsys):
+    print_status(output_path=str(tmp_path / "out.csv"))
+    assert "No checkpoint" in capsys.readouterr().out
+
+
+def test_print_status_with_totals(tmp_path, capsys):
+    ckpt = tmp_path / "c.jsonl"
+    ckpt.write_text(
+        '{"idx": 0, "fields": {"out": "hi"}, "cost": 0.01, "error": ""}\n'
+        '{"idx": 1, "fields": {}, "cost": 0.0, "error": "boom"}\n',
+        encoding="utf-8",
+    )
+    inp = tmp_path / "in.csv"
+    inp.write_text("a\nb\nc\nd\n", encoding="utf-8")
+    print_status(checkpoint_path=str(ckpt), output_path=str(tmp_path / "out.csv"), input_path=str(inp))
+    out = capsys.readouterr().out
+    assert "2/4 rows" in out
+    assert "2 remaining" in out
+    assert "1 ok, 1 errors" in out
+    assert "$0.0100" in out

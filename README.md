@@ -122,6 +122,9 @@ Edit `src/claude_batch/config.py` to add presets or change the retry policy.
 - `--keep-html` - keep HTML tags in input cells (default: strip `<b>`, decode `&nbsp;`).
 - `--checkpoint` - JSONL progress file (defaults to `<output>.checkpoint.jsonl`).
 - `--list-tasks` - print built-in tasks and exit.
+- `--status` - print checkpoint progress (done / remaining / errors / cost) for
+  `--output` (or `--checkpoint`) and exit, without running. Read-only, so it is safe
+  to point at a run in progress in another terminal. Pass `--input` for a row total.
 
 Lean-for-Pro internals (baked in): `--system-prompt-file` replaces the agent harness
 with just the task prompt, `--max-turns 1`, all tools disabled, `--output-format json`.
@@ -147,6 +150,8 @@ with just the task prompt, `--max-turns 1`, all tools disabled, `--output-format
   parsed, so any interrupted in-flight row is redone on resume either way.
 - **Resume:** re-run the **exact same command**. It loads the checkpoint, skips done
   rows, and continues. No special flag.
+- **Check progress:** `claude-batch --status --output out/x.csv [--input data/in.csv]`
+  prints done / remaining / errors / cost without running anything.
 
 ## Rate-limit behavior
 
