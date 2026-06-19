@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 import subprocess
 import sys
 import threading
@@ -11,6 +13,23 @@ import time
 from . import config
 
 _print_lock = threading.Lock()
+
+# Live `claude` child processes, so a hard kill (double Ctrl-C) can terminate the
+# whole tree instead of orphaning node subprocesses. Each child is its own process
+# group (start_new_session=True), so os.killpg reaps its descendants too.
+_children: set[subprocess.Popen] = set()
+_children_lock = threading.Lock()
+
+
+def terminate_children() -> None:
+    """SIGKILL every in-flight claude process group. Used on hard kill / abort."""
+    with _children_lock:
+        procs = list(_children)
+    for p in procs:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
 
 
 class LimitReached(RuntimeError):
@@ -45,12 +64,28 @@ def call_claude(prompt: str, system_prompt_file: str | None, model: str, timeout
         "--disallowed-tools",
         config.DISALLOWED_TOOLS,
     ]
+    # Own process group so a hard kill can reap the whole claude/node tree, and so
+    # a terminal Ctrl-C is no longer auto-delivered to children (the runner manages
+    # them explicitly: drain on first interrupt, killpg on the second).
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True
+    )
+    with _children_lock:
+        _children.add(proc)
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
+        out, err = proc.communicate(timeout=timeout_s)
     except subprocess.TimeoutExpired as e:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        proc.communicate()
         raise RuntimeError("error: claude call timed out") from e
+    finally:
+        with _children_lock:
+            _children.discard(proc)
 
-    stdout, stderr = proc.stdout.strip(), proc.stderr.strip()
+    stdout, stderr = (out or "").strip(), (err or "").strip()
 
     data = None
     if stdout:

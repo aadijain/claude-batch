@@ -5,10 +5,11 @@ from __future__ import annotations
 import csv
 import json
 import os
+import signal
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from .client import LimitReached, _print_lock, log, run_with_retries
+from .client import LimitReached, _print_lock, log, run_with_retries, terminate_children
 from .config import Settings, Task
 from .parse import render_prompt, split_fields, strip_html, template_vars
 
@@ -130,11 +131,16 @@ def run_batch(
     ckpt_lock = threading.Lock()
     total_cost = [0.0]
     completed = [0]
-    stop_event = threading.Event()  # set when a limit is hit under --stop-on-limit
+    # stop_event: drain gracefully (finish in-flight rows, stop submitting new).
+    # Set by a rate/usage limit under --stop-on-limit, or by the first Ctrl-C.
+    stop_event = threading.Event()
+    # hard_kill: the second Ctrl-C; in-flight claude processes are SIGKILLed, so
+    # those rows are abandoned (not checkpointed) and resume on the next run.
+    hard_kill = threading.Event()
 
     def worker(item):
         idx, prompt, _ = item
-        if stop_event.is_set():  # a limit already stopped the run; skip untouched
+        if stop_event.is_set():  # a limit/interrupt already stopped the run; skip untouched
             return None
         try:
             text, cost = run_with_retries(
@@ -152,6 +158,9 @@ def run_batch(
             stop_event.set()
             return None
         except Exception as e:  # noqa: BLE001 - record and continue
+            if hard_kill.is_set():
+                # The call was killed under our feet; leave the row for a re-run.
+                return None
             rec = {"idx": idx, "fields": {}, "cost": 0.0, "error": str(e)[:300]}
         append_checkpoint(checkpoint_path, rec, ckpt_lock)
         with _print_lock:
@@ -163,11 +172,38 @@ def run_batch(
         log(f"  [{n}/{len(todo)}] {tag} row {idx}: {preview}")
         return rec
 
+    interrupted = [False]  # first Ctrl-C: drain. second: hard kill.
+
+    def handle_interrupt(signum, frame):
+        if stop_event.is_set():
+            hard_kill.set()
+            log("\nSecond interrupt: killing in-flight claude processes now.")
+            terminate_children()
+        else:
+            interrupted[0] = True
+            stop_event.set()
+            log(
+                "\nInterrupt: finishing in-flight rows, then stopping "
+                "(re-run to resume). Ctrl-C again to kill now."
+            )
+
     if todo:
-        with ThreadPoolExecutor(max_workers=max(1, settings.concurrency)) as pool:
-            futures = [pool.submit(worker, item) for item in todo]
-            for _ in as_completed(futures):
-                pass
+        # Signal handlers can only be installed from the main thread; outside it
+        # (e.g. tests) just run without graceful-stop handling.
+        prev_handlers: dict[int, object] = {}
+        try:
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                prev_handlers[sig] = signal.signal(sig, handle_interrupt)
+        except ValueError:
+            prev_handlers = {}
+        try:
+            with ThreadPoolExecutor(max_workers=max(1, settings.concurrency)) as pool:
+                futures = [pool.submit(worker, item) for item in todo]
+                for _ in as_completed(futures):
+                    pass
+        finally:
+            for sig, handler in prev_handlers.items():
+                signal.signal(sig, handler)
 
     # Rebuild output CSV from checkpoint (durable source of truth).
     done = load_checkpoint(checkpoint_path)
@@ -183,7 +219,12 @@ def run_batch(
             w.writerow(row + [fields.get(c, "") for c in cols])
 
     stopped = stop_event.is_set()
-    headline = "Stopped on rate/usage limit." if stopped else "Done."
+    if interrupted[0]:
+        headline = "Interrupted." if not hard_kill.is_set() else "Killed."
+    elif stopped:
+        headline = "Stopped on rate/usage limit."
+    else:
+        headline = "Done."
     log(
         f"\n{headline} Wrote {output_path}. "
         f"Completed {len(done) - errors}/{len(work)} rows, {errors} errors. "

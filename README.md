@@ -137,9 +137,14 @@ with just the task prompt, `--max-turns 1`, all tools disabled, `--output-format
 
 ## Pause / resume / kill
 
-- **Kill (= pause):** `pkill -f claude_batch` (or Ctrl-C if foreground). A row enters
-  the checkpoint only after its full result is parsed, so a killed in-flight row is
+- **Graceful stop (Ctrl-C once, or SIGTERM):** stops submitting new rows but lets the
+  in-flight rows finish and checkpoint, then exits. Nothing in progress is wasted.
+- **Hard kill (Ctrl-C twice):** SIGKILLs the in-flight `claude` processes (and their
+  child trees) immediately. Those rows are abandoned, not checkpointed, so they are
   simply redone on resume.
+- **Background runs:** `pkill -TERM -f claude_batch` for a graceful drain, or
+  `pkill -KILL` to stop now. A row enters the checkpoint only after its full result is
+  parsed, so any interrupted in-flight row is redone on resume either way.
 - **Resume:** re-run the **exact same command**. It loads the checkpoint, skips done
   rows, and continues. No special flag.
 
