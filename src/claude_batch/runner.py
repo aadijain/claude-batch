@@ -49,16 +49,24 @@ def resolve_col(spec: str, header: list[str] | None) -> int:
     )
 
 
-def resolve_col_map(task: Task, col_map: dict[str, str], header: list[str] | None) -> dict[str, int]:
+def resolve_col_map(
+    task: Task, col_map: dict[str, str], header: list[str] | None, ncols: int | None = None
+) -> dict[str, int]:
     """Map each template variable to a 0-based input column index. A var may be set
-    explicitly via --col; otherwise it falls back to a same-named header."""
+    explicitly via --col; otherwise it falls back to a same-named header. As a final
+    convenience, a task with exactly one template var run over a single-column input
+    (`ncols == 1`) maps that var to column 0, so trivial tasks need no --col."""
+    vars_ = template_vars(task.prompt_template)
     resolved: dict[str, int] = {}
     missing: list[str] = []
-    for var in template_vars(task.prompt_template):
+    for var in vars_:
         spec = col_map.get(var)
         if spec is None and header and var in header:
             spec = var
         if spec is None:
+            if len(vars_) == 1 and ncols == 1:
+                resolved[var] = 0
+                continue
             missing.append(var)
             continue
         resolved[var] = resolve_col(spec, header)
@@ -95,7 +103,9 @@ def run_batch(
     header = rows[0] if has_header else None
     data_rows = rows[1:] if has_header else rows
 
-    var_idx = resolve_col_map(task, col_map, header)
+    # Width of the input: a "single-column" file has exactly one field in every row.
+    ncols = max((len(r) for r in (rows if has_header else data_rows)), default=0)
+    var_idx = resolve_col_map(task, col_map, header, ncols)
     primary = next(iter(var_idx.values()), None)  # row counts as work if this col is non-empty
 
     def cell(row: list[str], idx: int) -> str:

@@ -34,6 +34,25 @@ def test_resolve_col_map_missing_var_raises():
         resolve_col_map(task, {}, None)
 
 
+def test_resolve_col_map_single_var_single_column_auto():
+    # One template var over a single-column input needs no --col: defaults to col 0.
+    task = _task("{source}")
+    assert resolve_col_map(task, {}, None, ncols=1) == {"source": 0}
+
+
+def test_resolve_col_map_single_var_multicolumn_still_requires_col():
+    # The auto-default only kicks in for a genuinely single-column input.
+    task = _task("{source}")
+    with pytest.raises(SystemExit):
+        resolve_col_map(task, {}, None, ncols=2)
+
+
+def test_resolve_col_map_two_vars_no_auto():
+    task = _task("{source} {context}")
+    with pytest.raises(SystemExit):
+        resolve_col_map(task, {}, None, ncols=1)
+
+
 def test_run_with_retries_stop_on_limit_raises(monkeypatch):
     def fake_call(*a, **k):
         raise RuntimeError("limit: usage limit reached")

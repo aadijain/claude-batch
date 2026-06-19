@@ -111,7 +111,8 @@ Edit `src/claude_batch/config.py` to add presets or change the retry policy.
 - `--input` / `--output` - input CSV / final output CSV.
 - `--col VAR=COL` - map a task template variable to a CSV column (0-based index, or
   header name with `--has-header`). Repeatable. A variable also falls back to a
-  same-named header if `--col` is omitted.
+  same-named header if `--col` is omitted. A task with a single template variable run
+  over a single-column input needs no `--col` at all (it maps to column 0).
 - `--has-header` - treat the first row as a header.
 - `--preset` - model tier (`best` / `fast` / `cheap`, default `fast`).
 - `--model` / `--concurrency` - override the preset. Keep concurrency **1-2 on Pro**.
