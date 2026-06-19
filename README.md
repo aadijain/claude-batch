@@ -116,6 +116,8 @@ Edit `src/claude_batch/config.py` to add presets or change the retry policy.
 - `--preset` - model tier (`best` / `fast` / `cheap`, default `fast`).
 - `--model` / `--concurrency` - override the preset. Keep concurrency **1-2 on Pro**.
 - `--limit N` - process only the first N rows (trial runs).
+- `--stop-on-limit` - exit cleanly the moment a rate/usage limit hits, instead of
+  backing off (re-run the same command later to resume). See Rate-limit behavior.
 - `--keep-html` - keep HTML tags in input cells (default: strip `<b>`, decode `&nbsp;`).
 - `--checkpoint` - JSONL progress file (defaults to `<output>.checkpoint.jsonl`).
 - `--list-tasks` - print built-in tasks and exit.
@@ -146,6 +148,10 @@ On a Pro plan, when the window is exhausted the per-row call is detected as a li
 error and the script **backs off and retries** rather than dying: `60s -> 120s ->
 240s ...` doubling, up to 24 retries / 30-min cap. It resumes on its own when the
 window resets.
+
+Pass `--stop-on-limit` to opt out of the backoff: the run stops cleanly on the first
+limit, leaving the remaining rows untouched in the checkpoint. Re-run the exact same
+command later (once your window has reset) to resume from where it stopped.
 
 ## Gotchas
 

@@ -13,6 +13,11 @@ from . import config
 _print_lock = threading.Lock()
 
 
+class LimitReached(RuntimeError):
+    """A rate/usage limit was hit while `--stop-on-limit` is set: stop instead of
+    backing off, so the run can be resumed manually later from the checkpoint."""
+
+
 def log(msg: str) -> None:
     with _print_lock:
         print(msg, file=sys.stderr, flush=True)
@@ -70,7 +75,11 @@ def call_claude(prompt: str, system_prompt_file: str | None, model: str, timeout
 
 
 def run_with_retries(
-    prompt: str, system_prompt_file: str | None, model: str, timeout_s: int
+    prompt: str,
+    system_prompt_file: str | None,
+    model: str,
+    timeout_s: int,
+    stop_on_limit: bool = False,
 ) -> tuple[str, float]:
     general = 0
     limit = 0
@@ -80,6 +89,8 @@ def run_with_retries(
         except RuntimeError as e:
             msg = str(e)
             if msg.startswith("limit:"):
+                if stop_on_limit:
+                    raise LimitReached(msg) from e
                 limit += 1
                 if limit > config.MAX_LIMIT_RETRIES:
                     raise

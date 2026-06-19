@@ -52,6 +52,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     ap.add_argument("--limit", type=int, default=None, help="process at most N rows (trial runs)")
+    ap.add_argument(
+        "--stop-on-limit",
+        action="store_true",
+        help="exit cleanly when a rate/usage limit hits (re-run later to resume) instead of backing off",
+    )
     ap.add_argument("--keep-html", action="store_true", help="keep HTML tags in input cells (default: strip)")
     ap.add_argument(
         "--checkpoint", default=None, help="JSONL checkpoint path (default: <output>.checkpoint.jsonl)"
@@ -90,6 +95,7 @@ def main(argv: list[str] | None = None) -> None:
         limit=args.limit,
         keep_html=args.keep_html,
         checkpoint_path=args.checkpoint,
+        stop_on_limit=args.stop_on_limit,
     )
 
 

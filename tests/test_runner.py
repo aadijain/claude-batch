@@ -1,5 +1,7 @@
 import pytest
 
+from claude_batch import client
+from claude_batch.client import LimitReached, run_with_retries
 from claude_batch.config import Task
 from claude_batch.runner import load_checkpoint, resolve_col, resolve_col_map
 
@@ -30,6 +32,32 @@ def test_resolve_col_map_missing_var_raises():
     task = _task("{source}")
     with pytest.raises(SystemExit):
         resolve_col_map(task, {}, None)
+
+
+def test_run_with_retries_stop_on_limit_raises(monkeypatch):
+    def fake_call(*a, **k):
+        raise RuntimeError("limit: usage limit reached")
+
+    monkeypatch.setattr(client, "call_claude", fake_call)
+    with pytest.raises(LimitReached):
+        run_with_retries("p", None, "haiku", 1, stop_on_limit=True)
+
+
+def test_run_with_retries_without_stop_on_limit_backs_off(monkeypatch):
+    # Without the flag, a limit is retried (not raised as LimitReached): succeed on
+    # the 2nd attempt so the test stays fast and asserts the backoff path is taken.
+    calls = []
+
+    def fake_call(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("limit: usage limit reached")
+        return "ok", 0.0
+
+    monkeypatch.setattr(client, "call_claude", fake_call)
+    monkeypatch.setattr(client.time, "sleep", lambda *_: None)
+    assert run_with_retries("p", None, "haiku", 1) == ("ok", 0.0)
+    assert len(calls) == 2
 
 
 def test_load_checkpoint_roundtrip(tmp_path):

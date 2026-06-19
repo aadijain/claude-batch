@@ -8,7 +8,7 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from .client import _print_lock, log, run_with_retries
+from .client import LimitReached, _print_lock, log, run_with_retries
 from .config import Settings, Task
 from .parse import render_prompt, split_fields, strip_html, template_vars
 
@@ -81,6 +81,7 @@ def run_batch(
     limit: int | None = None,
     keep_html: bool = False,
     checkpoint_path: str | None = None,
+    stop_on_limit: bool = False,
 ) -> None:
     """Run `task` over `input_path` row by row and write `output_path`. Resumable
     via the JSONL checkpoint, which is the durable source of truth for progress."""
@@ -119,15 +120,27 @@ def run_batch(
     ckpt_lock = threading.Lock()
     total_cost = [0.0]
     completed = [0]
+    stop_event = threading.Event()  # set when a limit is hit under --stop-on-limit
 
     def worker(item):
         idx, prompt, _ = item
+        if stop_event.is_set():  # a limit already stopped the run; skip untouched
+            return None
         try:
             text, cost = run_with_retries(
-                prompt, task.system_prompt_file, settings.model, settings.call_timeout_s
+                prompt,
+                task.system_prompt_file,
+                settings.model,
+                settings.call_timeout_s,
+                stop_on_limit=stop_on_limit,
             )
             fields = split_fields(text, task.output_columns, task.sentinel)
             rec = {"idx": idx, "fields": fields, "raw": text, "cost": cost, "error": ""}
+        except LimitReached:
+            # Don't checkpoint: the row was not attempted to completion, so a
+            # re-run retries it. Signal the rest of the pool to stop.
+            stop_event.set()
+            return None
         except Exception as e:  # noqa: BLE001 - record and continue
             rec = {"idx": idx, "fields": {}, "cost": 0.0, "error": str(e)[:300]}
         append_checkpoint(checkpoint_path, rec, ckpt_lock)
@@ -159,12 +172,19 @@ def run_batch(
             fields = done.get(i, {}).get("fields", {})
             w.writerow(row + [fields.get(c, "") for c in cols])
 
+    stopped = stop_event.is_set()
+    headline = "Stopped on rate/usage limit." if stopped else "Done."
     log(
-        f"\nDone. Wrote {output_path}. "
+        f"\n{headline} Wrote {output_path}. "
         f"Completed {len(done) - errors}/{len(work)} rows, {errors} errors. "
         f"Reported API cost: ${total_cost[0]:.4f} (this run; $0 if drawn from the Pro subscription)."
     )
-    if errors:
+    if stopped:
+        log(
+            f"Remaining rows were left untouched; re-run the same command later to resume "
+            f"(checkpoint: {checkpoint_path})."
+        )
+    elif errors:
         log(
             f"Rows with errors stay blank; re-run the same command to retry just those "
             f"(checkpoint: {checkpoint_path})."
