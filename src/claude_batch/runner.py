@@ -8,6 +8,7 @@ import json
 import os
 import signal
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .client import LimitReached, _print_lock, log, run_with_retries, terminate_children
@@ -151,6 +152,17 @@ def print_status(
     print(f"Cost:       ${cost:.4f} (reported API cost; $0 if drawn from a subscription)")
 
 
+def fmt_duration(seconds: float) -> str:
+    s = int(seconds)
+    h, rem = divmod(s, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h{m:02d}m"
+    if m:
+        return f"{m}m{s:02d}s"
+    return f"{s}s"
+
+
 # --- CSV helpers ------------------------------------------------------------
 def resolve_col(spec: str, header: list[str] | None, ncols: int | None = None) -> int:
     if spec.isdigit():
@@ -280,6 +292,7 @@ def run_batch(
     ckpt_lock = threading.Lock()
     total_cost = [0.0]
     completed = [0]
+    start_t = time.monotonic()
     sentinel_misses = [0]  # rows whose response lacked the sentinel (trailing cols empty)
     stop_reason = [""]  # "limit" or "cost" when stop_event was set by one of those
     # stop_event: drain gracefully (finish in-flight rows, stop submitting new).
@@ -339,7 +352,12 @@ def run_batch(
             )
         tag = "ERR " if rec["error"] else "ok  "
         preview = next(iter(rec["fields"].values()), "")[:60] or rec["error"][:60]
-        log(f"  [{n}/{len(todo)}] {tag} row {idx}: {preview}")
+        eta = ""
+        remaining = len(todo) - n
+        elapsed = time.monotonic() - start_t
+        if n >= 2 and remaining > 0 and elapsed > 0:
+            eta = f" (ETA {fmt_duration(remaining * elapsed / n)})"
+        log(f"  [{n}/{len(todo)}] {tag} row {idx}: {preview}{eta}")
         return rec
 
     interrupted = [False]  # first Ctrl-C: drain. second: hard kill.

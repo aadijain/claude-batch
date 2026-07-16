@@ -242,6 +242,14 @@ def test_run_batch_stops_at_max_cost(tmp_path, monkeypatch, capsys):
     assert "Stopped at the --max-cost budget." in capsys.readouterr().err
 
 
+def test_fmt_duration():
+    from claude_batch.runner import fmt_duration
+
+    assert fmt_duration(5) == "5s"
+    assert fmt_duration(65) == "1m05s"
+    assert fmt_duration(3720) == "1h02m"
+
+
 def test_load_checkpoint_roundtrip(tmp_path):
     ckpt = tmp_path / "c.jsonl"
     ckpt.write_text(
