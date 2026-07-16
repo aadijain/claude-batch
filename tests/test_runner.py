@@ -191,6 +191,21 @@ def test_run_batch_allows_appended_rows(tmp_path, monkeypatch):
     assert len(out_rows) == 2
 
 
+def test_run_batch_reports_sentinel_misses(tmp_path, monkeypatch, capsys):
+    # Two output columns but the model never emits the sentinel: the run works,
+    # trailing columns stay empty, and the summary calls it out.
+    task = Task(
+        name="t",
+        description="",
+        prompt_template="{source}",
+        output_columns=("translation", "notes"),
+        sentinel="---NOTES---",
+    )
+    out_rows, done = _run(tmp_path, monkeypatch, _ok, rows=[["a"]], task=task)
+    assert done[0]["fields"] == {"translation": "ok:a", "notes": ""}
+    assert "without the '---NOTES---' sentinel" in capsys.readouterr().err
+
+
 def test_load_checkpoint_roundtrip(tmp_path):
     ckpt = tmp_path / "c.jsonl"
     ckpt.write_text(

@@ -256,6 +256,7 @@ def run_batch(
     ckpt_lock = threading.Lock()
     total_cost = [0.0]
     completed = [0]
+    sentinel_misses = [0]  # rows whose response lacked the sentinel (trailing cols empty)
     # stop_event: drain gracefully (finish in-flight rows, stop submitting new).
     # Set by a rate/usage limit under --stop-on-limit, or by the first Ctrl-C.
     stop_event = threading.Event()
@@ -287,11 +288,19 @@ def run_batch(
                 # The call was killed under our feet; leave the row for a re-run.
                 return None
             rec = {"idx": idx, "fields": {}, "cost": 0.0, "error": str(e)[:300]}
+        missed_sentinel = bool(
+            not rec["error"]
+            and task.sentinel
+            and len(task.output_columns) > 1
+            and not rec["fields"].get(task.output_columns[-1], "").strip()
+        )
         append_checkpoint(checkpoint_path, rec, ckpt_lock)
         with _print_lock:
             total_cost[0] += rec["cost"]
             completed[0] += 1
             n = completed[0]
+            if missed_sentinel:
+                sentinel_misses[0] += 1
         tag = "ERR " if rec["error"] else "ok  "
         preview = next(iter(rec["fields"].values()), "")[:60] or rec["error"][:60]
         log(f"  [{n}/{len(todo)}] {tag} row {idx}: {preview}")
@@ -330,11 +339,13 @@ def run_batch(
             for sig, handler in prev_handlers.items():
                 signal.signal(sig, handler)
 
-    # Rebuild output CSV from checkpoint (durable source of truth).
+    # Rebuild output CSV from checkpoint (durable source of truth). Write to a
+    # temp file and rename so a crash never leaves a half-written output.
     done = load_checkpoint(checkpoint_path)
     errors = sum(1 for r in done.values() if r.get("error"))
     cols = task.output_columns
-    with open(output_path, "w", newline="", encoding="utf-8") as f:
+    tmp_output = output_path + ".tmp"
+    with open(tmp_output, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         if header is not None:
             w.writerow(header + list(cols))
@@ -342,6 +353,7 @@ def run_batch(
         for i, row in enumerate(scoped):
             fields = done.get(i, {}).get("fields", {})
             w.writerow(row + [fields.get(c, "") for c in cols])
+    os.replace(tmp_output, output_path)
 
     stopped = stop_event.is_set()
     if interrupted[0]:
@@ -355,6 +367,11 @@ def run_batch(
         f"Completed {len(done) - errors}/{len(work)} rows, {errors} errors. "
         f"Reported API cost: ${total_cost[0]:.4f} (this run; $0 if drawn from the Pro subscription)."
     )
+    if sentinel_misses[0]:
+        log(
+            f"note: {sentinel_misses[0]} row(s) came back without the '{task.sentinel}' sentinel, "
+            f"so trailing column(s) were left empty. If this is frequent, tighten the prompt template."
+        )
     if stopped:
         log(
             f"Remaining rows were left untouched; re-run the same command later to resume "
