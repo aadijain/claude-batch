@@ -378,7 +378,7 @@ def run_batch(
     if todo:
         # Signal handlers can only be installed from the main thread; outside it
         # (e.g. tests) just run without graceful-stop handling.
-        prev_handlers: dict[int, object] = {}
+        prev_handlers: dict[signal.Signals, signal._HANDLER] = {}
         try:
             for sig in (signal.SIGINT, signal.SIGTERM):
                 prev_handlers[sig] = signal.signal(sig, handle_interrupt)

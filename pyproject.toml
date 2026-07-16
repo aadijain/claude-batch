@@ -10,7 +10,7 @@ dependencies = []
 claude-batch = "claude_batch.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11"]
 
 [build-system]
 requires = ["hatchling"]
@@ -28,6 +28,13 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+files = ["src"]
+python_version = "3.11"
+warn_unused_ignores = true
+warn_redundant_casts = true
+check_untyped_defs = true
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
