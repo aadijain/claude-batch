@@ -22,6 +22,14 @@ def test_missing_required_args_exits():
         main([])
 
 
+def test_version_flag(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["--version"])
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert out.startswith("claude-batch ") and out.split()[1][0].isdigit()
+
+
 def test_parse_col():
     assert _parse_col(["source=0", "context=jp"]) == {"source": "0", "context": "jp"}
     with pytest.raises(SystemExit):

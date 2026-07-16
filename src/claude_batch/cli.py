@@ -24,10 +24,13 @@ def _parse_col(pairs: list[str]) -> dict[str, str]:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    from . import __version__
+
     ap = argparse.ArgumentParser(
         prog="claude-batch",
         description="Run a task over the rows of a CSV via claude -p (headless Claude Code).",
     )
+    ap.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     ap.add_argument("--input", help="input CSV path")
     ap.add_argument("--output", help="output CSV path")
     ap.add_argument("--task", default=None, help="built-in task name or path to a task .toml")
