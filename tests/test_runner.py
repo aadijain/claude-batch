@@ -149,6 +149,48 @@ def test_run_batch_skips_completed_rows(tmp_path, monkeypatch):
     assert [r[-1] for r in out_rows] == ["ok0"]
 
 
+def _ok(prompt, *a, **k):
+    return "ok:" + prompt, 0.0
+
+
+def test_run_batch_stamps_meta_on_first_run(tmp_path, monkeypatch):
+    from claude_batch.runner import load_meta
+
+    _run(tmp_path, monkeypatch, _ok, rows=[["a"]])
+    meta = load_meta(str(tmp_path / "out.csv.checkpoint.jsonl"))
+    assert meta["task"] == "t" and meta["input_rows"] == 1 and meta["rows_sha256"]
+
+
+def test_run_batch_rejects_checkpoint_from_other_task(tmp_path, monkeypatch):
+    with pytest.raises(SystemExit):
+        _run(tmp_path, monkeypatch, _ok, rows=[["a"]], checkpoint_text='{"meta": 1, "task": "other"}\n')
+
+
+def test_run_batch_rejects_edited_input(tmp_path, monkeypatch):
+    _run(tmp_path, monkeypatch, _ok, rows=[["a"], ["b"]])
+    with pytest.raises(SystemExit):
+        _run(tmp_path, monkeypatch, _ok, rows=[["EDITED"], ["b"]])
+
+
+def test_run_batch_rejects_shrunk_input(tmp_path, monkeypatch):
+    _run(tmp_path, monkeypatch, _ok, rows=[["a"], ["b"]])
+    with pytest.raises(SystemExit):
+        _run(tmp_path, monkeypatch, _ok, rows=[["a"]])
+
+
+def test_run_batch_allows_appended_rows(tmp_path, monkeypatch):
+    called = []
+
+    def fake(prompt, *a, **k):
+        called.append(prompt)
+        return "ok", 0.0
+
+    _run(tmp_path, monkeypatch, fake, rows=[["a"]])
+    out_rows, _ = _run(tmp_path, monkeypatch, fake, rows=[["a"], ["b"]])
+    assert called == ["a", "b"]
+    assert len(out_rows) == 2
+
+
 def test_load_checkpoint_roundtrip(tmp_path):
     ckpt = tmp_path / "c.jsonl"
     ckpt.write_text(
