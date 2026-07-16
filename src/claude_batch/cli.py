@@ -68,6 +68,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument("--list-tasks", action="store_true", help="list built-in tasks and exit")
     ap.add_argument(
+        "--show-task",
+        metavar="TASK",
+        default=None,
+        help="print a task's template, columns, and sentinel, then exit",
+    )
+    ap.add_argument(
         "--status",
         action="store_true",
         help="print checkpoint progress for --output (or --checkpoint) and exit; no run",
@@ -86,6 +92,17 @@ def main(argv: list[str] | None = None) -> None:
         for name in tasks:
             task = load_task(name)
             print(f"{name:16} {task.description}")
+        return
+
+    if args.show_task:
+        task = load_task(args.show_task)
+        print(f"name:               {task.name}")
+        print(f"description:        {task.description or '(none)'}")
+        print(f"output_columns:     {', '.join(task.output_columns)}")
+        print(f"sentinel:           {task.sentinel or '(none: single raw column)'}")
+        print(f"system_prompt_file: {task.system_prompt_file or '(claude default)'}")
+        print("\nprompt_template:")
+        print(task.prompt_template.strip())
         return
 
     if args.status:
