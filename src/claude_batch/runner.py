@@ -77,9 +77,14 @@ def print_status(
 
 
 # --- CSV helpers ------------------------------------------------------------
-def resolve_col(spec: str, header: list[str] | None) -> int:
+def resolve_col(spec: str, header: list[str] | None, ncols: int | None = None) -> int:
     if spec.isdigit():
-        return int(spec)
+        idx = int(spec)
+        if ncols is not None and idx >= ncols:
+            raise SystemExit(
+                f"Column index {idx} is out of range: the input has {ncols} column(s) (0-based)."
+            )
+        return idx
     if header and spec in header:
         return header.index(spec)
     raise SystemExit(
@@ -108,7 +113,7 @@ def resolve_col_map(
                 continue
             missing.append(var)
             continue
-        resolved[var] = resolve_col(spec, header)
+        resolved[var] = resolve_col(spec, header, ncols)
     if missing:
         raise SystemExit(
             f"Task '{task.name}' needs a column for: {', '.join(missing)}. "

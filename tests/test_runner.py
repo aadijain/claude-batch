@@ -22,6 +22,15 @@ def test_resolve_col_unknown_raises():
         resolve_col("missing", ["japanese"])
 
 
+def test_resolve_col_index_out_of_range_raises():
+    with pytest.raises(SystemExit):
+        resolve_col("5", None, ncols=2)
+
+
+def test_resolve_col_index_in_range_ok():
+    assert resolve_col("1", None, ncols=2) == 1
+
+
 def test_resolve_col_map_explicit_and_header_fallback():
     task = _task("{source} / {context}")
     # source mapped explicitly; context falls back to a same-named header.
