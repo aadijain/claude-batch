@@ -51,7 +51,9 @@ def call_claude(prompt: str, system_prompt_file: str | None, model: str, timeout
     """Run one claude -p invocation. Returns (result_text, cost_usd).
     Raises RuntimeError('limit:...') for rate/usage limits, RuntimeError('error:...')
     for everything else, so the caller can pick the right backoff."""
-    cmd = ["claude", "-p", prompt]
+    # The prompt goes over stdin (claude -p reads it when the positional is
+    # omitted): argv would leak row text into `ps` and can overflow ARG_MAX.
+    cmd = ["claude", "-p"]
     if system_prompt_file:
         cmd += ["--system-prompt-file", system_prompt_file]
     cmd += [
@@ -68,12 +70,17 @@ def call_claude(prompt: str, system_prompt_file: str | None, model: str, timeout
     # a terminal Ctrl-C is no longer auto-delivered to children (the runner manages
     # them explicitly: drain on first interrupt, killpg on the second).
     proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
     )
     with _children_lock:
         _children.add(proc)
     try:
-        out, err = proc.communicate(timeout=timeout_s)
+        out, err = proc.communicate(input=prompt, timeout=timeout_s)
     except subprocess.TimeoutExpired as e:
         try:
             os.killpg(proc.pid, signal.SIGKILL)
