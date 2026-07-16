@@ -117,14 +117,21 @@ Edit `src/claude_batch/config.py` to add presets or change the retry policy.
 - `--preset` - model tier (`best` / `fast` / `cheap`, default `fast`).
 - `--model` / `--concurrency` - override the preset. Keep concurrency **1-2 on Pro**.
 - `--limit N` - process only the first N rows (trial runs).
+- `--dry-run` - print the rendered prompt for every row in scope (and whether it
+  would run, is already checkpointed, or is skipped as empty), then exit. Nothing is
+  called or written; use it to debug a template or a `--col` mapping for free.
 - `--stop-on-limit` - exit cleanly the moment a rate/usage limit hits, instead of
   backing off (re-run the same command later to resume). See Rate-limit behavior.
+- `--max-cost USD` - stop submitting new rows once this run's reported API cost
+  reaches the budget (in-flight rows finish and checkpoint; re-run to resume).
 - `--keep-html` - keep HTML tags in input cells (default: strip `<b>`, decode `&nbsp;`).
 - `--checkpoint` - JSONL progress file (defaults to `<output>.checkpoint.jsonl`).
 - `--list-tasks` - print built-in tasks and exit.
+- `--show-task TASK` - print a task's template, output columns, and sentinel, then exit.
 - `--status` - print checkpoint progress (done / remaining / errors / cost) for
   `--output` (or `--checkpoint`) and exit, without running. Read-only, so it is safe
   to point at a run in progress in another terminal. Pass `--input` for a row total.
+- `--version` - print the installed version and exit.
 
 Lean-for-Pro internals (baked in): `--system-prompt-file` replaces the agent harness
 with just the task prompt, `--max-turns 1`, all tools disabled, `--output-format json`.
@@ -133,7 +140,9 @@ with just the task prompt, `--max-turns 1`, all tools disabled, `--output-format
 
 - **Checkpoint** (`<output>.checkpoint.jsonl`) - one JSON record per row
   (`idx`, `fields`, `raw`, `cost`, `error`), written the instant each row finishes.
-  **The source of truth for progress** - safe if the run is killed.
+  **The source of truth for progress** - safe if the run is killed. The first record
+  is a meta stamp (task, model, input row fingerprint) used to refuse a resume
+  against the wrong task or a changed input.
 - **Final CSV** - original columns + the task's `output_columns`, parsed from the
   model response. Rebuilt from the checkpoint on every run, so a partial CSV can be
   regenerated with zero API calls.
@@ -149,7 +158,7 @@ with just the task prompt, `--max-turns 1`, all tools disabled, `--output-format
   `pkill -KILL` to stop now. A row enters the checkpoint only after its full result is
   parsed, so any interrupted in-flight row is redone on resume either way.
 - **Resume:** re-run the **exact same command**. It loads the checkpoint, skips done
-  rows, and continues. No special flag.
+  rows, retries rows that previously errored, and continues. No special flag.
 - **Check progress:** `claude-batch --status --output out/x.csv [--input data/in.csv]`
   prints done / remaining / errors / cost without running anything.
 
@@ -167,23 +176,26 @@ command later (once your window has reset) to resume from where it stopped.
 ## Gotchas
 
 - **Do NOT reshuffle the input between runs.** The checkpoint keys rows by their
-  **position in the input file**; reshuffling desyncs the resume mapping. Keep
-  `--input` and `--checkpoint` pointed at the same files, in the same order.
+  **position in the input file**; reshuffling desyncs the resume mapping. The meta
+  stamp catches this: a resume against a different task, or an input whose existing
+  rows changed, is refused (appending new rows is fine).
 - Use a distinct `--output` (and thus default checkpoint) per task/model so one run's
   checkpoint doesn't short-circuit another.
 
 ## Develop
 
 ```bash
-uv sync                 # install dev deps (pytest, ruff)
+uv sync                 # install dev deps (pytest, ruff, mypy)
 uv run ruff check .     # lint
 uv run ruff format .    # format
+uv run mypy             # type-check src/
 uv run pytest -q        # tests (pure logic; no API calls)
 ```
 
-Every commit should be green on all three. Tests cover the no-network logic (parsing,
-rendering, presets, task loading, checkpoint, column mapping); the `claude -p` call
-itself is exercised by real runs.
+Every commit should be green on all four; CI (GitHub Actions) runs the same gate on
+push and PRs. Tests cover the no-network logic (parsing, rendering, presets, task
+loading, checkpoint/resume, column mapping, retry policy, CLI); the `claude -p` call
+itself is faked at the subprocess boundary and exercised for real by actual runs.
 
 ## Cost / quota
 
