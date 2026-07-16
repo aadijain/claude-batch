@@ -209,6 +209,7 @@ def run_batch(
     keep_html: bool = False,
     checkpoint_path: str | None = None,
     stop_on_limit: bool = False,
+    dry_run: bool = False,
 ) -> None:
     """Run `task` over `input_path` row by row and write `output_path`. Resumable
     via the JSONL checkpoint, which is the durable source of truth for progress."""
@@ -238,6 +239,28 @@ def run_batch(
         work.append((i, render_prompt(task.prompt_template, values), bool(has_input)))
     if limit is not None:
         work = work[:limit]
+
+    if dry_run:
+        # Read-only preview: print each rendered prompt and what would happen.
+        # Nothing is called, and the checkpoint is neither created nor stamped.
+        done = load_checkpoint(checkpoint_path)
+        would_run = 0
+        for idx, prompt, has_input in work:
+            if not has_input or not prompt.strip():
+                status = "skip (empty input)"
+            elif idx in done and not done[idx].get("error"):
+                status = "done (checkpointed)"
+            else:
+                status = "would run"
+                would_run += 1
+            print(f"--- row {idx}: {status} ---")
+            if prompt.strip():
+                print(prompt + "\n")
+        log(
+            f"Dry run: {would_run} of {len(work)} rows would run "
+            f"(task={task.name}, model={settings.model}). Nothing was called or written."
+        )
+        return
 
     verify_or_stamp_meta(checkpoint_path, task, settings.model, data_rows)
 

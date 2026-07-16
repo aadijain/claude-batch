@@ -53,6 +53,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     ap.add_argument("--limit", type=int, default=None, help="process at most N rows (trial runs)")
     ap.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the rendered prompt per row and exit; nothing is called or written",
+    )
+    ap.add_argument(
         "--stop-on-limit",
         action="store_true",
         help="exit cleanly when a rate/usage limit hits (re-run later to resume) instead of backing off",
@@ -114,6 +119,7 @@ def main(argv: list[str] | None = None) -> None:
         keep_html=args.keep_html,
         checkpoint_path=args.checkpoint,
         stop_on_limit=args.stop_on_limit,
+        dry_run=args.dry_run,
     )
 
 

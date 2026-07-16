@@ -206,6 +206,28 @@ def test_run_batch_reports_sentinel_misses(tmp_path, monkeypatch, capsys):
     assert "without the '---NOTES---' sentinel" in capsys.readouterr().err
 
 
+def test_run_batch_dry_run_calls_nothing_and_writes_nothing(tmp_path, monkeypatch, capsys):
+    def fake(prompt, *a, **k):
+        raise AssertionError("dry run must not call claude")
+
+    inp = tmp_path / "in.csv"
+    with open(inp, "w", newline="", encoding="utf-8") as f:
+        csv.writer(f).writerows([["a"], [""]])
+    monkeypatch.setattr(runner, "run_with_retries", fake)
+    run_batch(
+        input_path=str(inp),
+        output_path=str(tmp_path / "out.csv"),
+        task=_task("{source}"),
+        col_map={},
+        settings=Settings(model="haiku", concurrency=1),
+        dry_run=True,
+    )
+    out = capsys.readouterr().out
+    assert "row 0: would run" in out and "row 1: skip (empty input)" in out
+    assert not (tmp_path / "out.csv").exists()
+    assert not (tmp_path / "out.csv.checkpoint.jsonl").exists()
+
+
 def test_load_checkpoint_roundtrip(tmp_path):
     ckpt = tmp_path / "c.jsonl"
     ckpt.write_text(
