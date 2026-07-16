@@ -160,10 +160,15 @@ def run_batch(
         work = work[:limit]
 
     done = load_checkpoint(checkpoint_path)
-    todo = [w for w in work if w[0] not in done and w[2] and w[1].strip()]
+    # Errored rows are re-attempted: the checkpoint is append-only and the last
+    # record per idx wins, so a successful retry replaces the error record.
+    todo = [w for w in work if w[2] and w[1].strip() and (w[0] not in done or done[w[0]].get("error"))]
+    retries = sum(1 for w in todo if w[0] in done)
+    ok_done = sum(1 for r in done.values() if not r.get("error"))
     log(
-        f"{len(work)} rows in scope, {len(done)} already done, {len(todo)} to run "
-        f"(task={task.name}, model={settings.model}, concurrency={settings.concurrency})."
+        f"{len(work)} rows in scope, {ok_done} already done, {len(todo)} to run"
+        + (f" ({retries} error retries)" if retries else "")
+        + f" (task={task.name}, model={settings.model}, concurrency={settings.concurrency})."
     )
 
     ckpt_lock = threading.Lock()

@@ -1,9 +1,11 @@
+import csv
+
 import pytest
 
-from claude_batch import client
+from claude_batch import client, runner
 from claude_batch.client import LimitReached, run_with_retries
-from claude_batch.config import Task
-from claude_batch.runner import load_checkpoint, print_status, resolve_col, resolve_col_map
+from claude_batch.config import Settings, Task
+from claude_batch.runner import load_checkpoint, print_status, resolve_col, resolve_col_map, run_batch
 
 
 def _task(template, cols=("out",)):
@@ -77,6 +79,65 @@ def test_run_with_retries_without_stop_on_limit_backs_off(monkeypatch):
     monkeypatch.setattr(client.time, "sleep", lambda *_: None)
     assert run_with_retries("p", None, "haiku", 1) == ("ok", 0.0)
     assert len(calls) == 2
+
+
+def _run(tmp_path, monkeypatch, fake, rows, checkpoint_text=None, **kw):
+    """Drive run_batch over `rows` with run_with_retries stubbed by `fake`."""
+    inp = tmp_path / "in.csv"
+    with open(inp, "w", newline="", encoding="utf-8") as f:
+        csv.writer(f).writerows(rows)
+    out = tmp_path / "out.csv"
+    ckpt = tmp_path / "out.csv.checkpoint.jsonl"
+    if checkpoint_text is not None:
+        ckpt.write_text(checkpoint_text, encoding="utf-8")
+    monkeypatch.setattr(runner, "run_with_retries", fake)
+    run_batch(
+        input_path=str(inp),
+        output_path=str(out),
+        task=kw.pop("task", _task("{source}")),
+        col_map={},
+        settings=Settings(model="haiku", concurrency=1),
+        **kw,
+    )
+    with open(out, newline="", encoding="utf-8") as f:
+        return list(csv.reader(f)), load_checkpoint(str(ckpt))
+
+
+def test_run_batch_retries_errored_rows(tmp_path, monkeypatch):
+    # Row 0 succeeded previously, row 1 errored: a re-run retries only row 1.
+    called = []
+
+    def fake(prompt, *a, **k):
+        called.append(prompt)
+        return "fixed", 0.0
+
+    out_rows, done = _run(
+        tmp_path,
+        monkeypatch,
+        fake,
+        rows=[["a"], ["b"]],
+        checkpoint_text=(
+            '{"idx": 0, "fields": {"out": "ok0"}, "cost": 0.0, "error": ""}\n'
+            '{"idx": 1, "fields": {}, "cost": 0.0, "error": "boom"}\n'
+        ),
+    )
+    assert called == ["b"]
+    assert done[1]["fields"]["out"] == "fixed" and not done[1]["error"]
+    assert [r[-1] for r in out_rows] == ["ok0", "fixed"]
+
+
+def test_run_batch_skips_completed_rows(tmp_path, monkeypatch):
+    def fake(prompt, *a, **k):
+        raise AssertionError("should not be called")
+
+    out_rows, _ = _run(
+        tmp_path,
+        monkeypatch,
+        fake,
+        rows=[["a"]],
+        checkpoint_text='{"idx": 0, "fields": {"out": "ok0"}, "cost": 0.0, "error": ""}\n',
+    )
+    assert [r[-1] for r in out_rows] == ["ok0"]
 
 
 def test_load_checkpoint_roundtrip(tmp_path):
