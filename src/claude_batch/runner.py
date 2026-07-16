@@ -210,6 +210,7 @@ def run_batch(
     checkpoint_path: str | None = None,
     stop_on_limit: bool = False,
     dry_run: bool = False,
+    max_cost: float | None = None,
 ) -> None:
     """Run `task` over `input_path` row by row and write `output_path`. Resumable
     via the JSONL checkpoint, which is the durable source of truth for progress."""
@@ -280,6 +281,7 @@ def run_batch(
     total_cost = [0.0]
     completed = [0]
     sentinel_misses = [0]  # rows whose response lacked the sentinel (trailing cols empty)
+    stop_reason = [""]  # "limit" or "cost" when stop_event was set by one of those
     # stop_event: drain gracefully (finish in-flight rows, stop submitting new).
     # Set by a rate/usage limit under --stop-on-limit, or by the first Ctrl-C.
     stop_event = threading.Event()
@@ -304,6 +306,7 @@ def run_batch(
         except LimitReached:
             # Don't checkpoint: the row was not attempted to completion, so a
             # re-run retries it. Signal the rest of the pool to stop.
+            stop_reason[0] = stop_reason[0] or "limit"
             stop_event.set()
             return None
         except Exception as e:  # noqa: BLE001 - record and continue
@@ -318,12 +321,22 @@ def run_batch(
             and not rec["fields"].get(task.output_columns[-1], "").strip()
         )
         append_checkpoint(checkpoint_path, rec, ckpt_lock)
+        hit_budget = False
         with _print_lock:
             total_cost[0] += rec["cost"]
             completed[0] += 1
             n = completed[0]
             if missed_sentinel:
                 sentinel_misses[0] += 1
+            if max_cost is not None and total_cost[0] >= max_cost and not stop_event.is_set():
+                stop_reason[0] = "cost"
+                stop_event.set()
+                hit_budget = True
+        if hit_budget:
+            log(
+                f"  --max-cost ${max_cost:.4f} reached (${total_cost[0]:.4f} spent); "
+                f"finishing in-flight rows, then stopping."
+            )
         tag = "ERR " if rec["error"] else "ok  "
         preview = next(iter(rec["fields"].values()), "")[:60] or rec["error"][:60]
         log(f"  [{n}/{len(todo)}] {tag} row {idx}: {preview}")
@@ -381,6 +394,8 @@ def run_batch(
     stopped = stop_event.is_set()
     if interrupted[0]:
         headline = "Interrupted." if not hard_kill.is_set() else "Killed."
+    elif stopped and stop_reason[0] == "cost":
+        headline = "Stopped at the --max-cost budget."
     elif stopped:
         headline = "Stopped on rate/usage limit."
     else:

@@ -228,6 +228,20 @@ def test_run_batch_dry_run_calls_nothing_and_writes_nothing(tmp_path, monkeypatc
     assert not (tmp_path / "out.csv.checkpoint.jsonl").exists()
 
 
+def test_run_batch_stops_at_max_cost(tmp_path, monkeypatch, capsys):
+    called = []
+
+    def fake(prompt, *a, **k):
+        called.append(prompt)
+        return "ok", 1.0
+
+    out_rows, done = _run(tmp_path, monkeypatch, fake, rows=[["a"], ["b"], ["c"]], max_cost=1.0)
+    # concurrency=1: the first row hits the budget, the rest are never called.
+    assert called == ["a"]
+    assert set(done) == {0}
+    assert "Stopped at the --max-cost budget." in capsys.readouterr().err
+
+
 def test_load_checkpoint_roundtrip(tmp_path):
     ckpt = tmp_path / "c.jsonl"
     ckpt.write_text(

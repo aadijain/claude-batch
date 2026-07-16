@@ -62,6 +62,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="exit cleanly when a rate/usage limit hits (re-run later to resume) instead of backing off",
     )
+    ap.add_argument(
+        "--max-cost",
+        type=float,
+        default=None,
+        metavar="USD",
+        help="stop submitting new rows once this run's reported API cost reaches USD",
+    )
     ap.add_argument("--keep-html", action="store_true", help="keep HTML tags in input cells (default: strip)")
     ap.add_argument(
         "--checkpoint", default=None, help="JSONL checkpoint path (default: <output>.checkpoint.jsonl)"
@@ -137,6 +144,7 @@ def main(argv: list[str] | None = None) -> None:
         checkpoint_path=args.checkpoint,
         stop_on_limit=args.stop_on_limit,
         dry_run=args.dry_run,
+        max_cost=args.max_cost,
     )
 
 
