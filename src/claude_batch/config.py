@@ -3,7 +3,7 @@
 Three orthogonal pieces live here:
 - `Settings` : per-run model knobs (model, concurrency, timeout). Pick a `PRESET`
   by name, then overlay CLI flags.
-- `PRESETS`  : named model tiers (best/fast/cheap) - WHICH model, not WHAT task.
+- `PRESETS`  : named model tiers (max/best/fast/cheap) - WHICH model, not WHAT task.
 - `Task`     : a `.toml` file declaring WHAT to do - a prompt template with
   `{var}` placeholders, the output columns, an optional field sentinel, and an
   optional system-prompt file. Built-in tasks ship in `tasks/`; any path works.
@@ -62,6 +62,9 @@ class Settings:
 # --- Named model presets ----------------------------------------------------
 # A preset picks WHICH model/throughput tier. The task (WHAT to do) is separate.
 PRESETS: dict[str, Settings] = {
+    # Fable has no short claude-code alias (bare "fable" 404s); full id required.
+    # Turns can run minutes, hence the longer timeout and single-file concurrency.
+    "max": Settings(model="claude-fable-5", concurrency=1, call_timeout_s=600),
     "best": Settings(model="opus", concurrency=2),  # richest output
     "fast": Settings(model="sonnet", concurrency=2),  # close 2nd, cheaper
     "cheap": Settings(model="haiku", concurrency=2),  # trial / smoke tests

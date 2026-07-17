@@ -99,6 +99,7 @@ A preset picks **which model** (orthogonal to the task). Flags override it.
 
 | Preset | Model | Notes |
 |--------|-------|-------|
+| `max` | claude-fable-5 | Frontier tier; slow (minutes-long turns) and pricey. |
 | `best` | opus | Richest output. |
 | `fast` | sonnet | Default. Close 2nd, cheaper/faster. |
 | `cheap` | haiku | Trial / smoke tests. |
@@ -114,7 +115,7 @@ Edit `src/claude_batch/config.py` to add presets or change the retry policy.
   same-named header if `--col` is omitted. A task with a single template variable run
   over a single-column input needs no `--col` at all (it maps to column 0).
 - `--has-header` - treat the first row as a header.
-- `--preset` - model tier (`best` / `fast` / `cheap`, default `fast`).
+- `--preset` - model tier (`max` / `best` / `fast` / `cheap`, default `fast`).
 - `--model` / `--concurrency` - override the preset. Keep concurrency **1-2 on Pro**.
 - `--pack N` - pack N rows into each `claude` call (default 1). Each call carries a
   fixed prompt overhead (the Claude Code harness is ~15K input tokens) that dwarfs a

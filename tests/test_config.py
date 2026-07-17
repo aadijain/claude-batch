@@ -13,6 +13,17 @@ def test_default_preset_is_fast_sonnet():
     assert s.model == "sonnet"
 
 
+def test_max_preset_is_fable():
+    s = resolve_settings("max")
+    # Bare "fable" is not a valid claude-code alias (404s); the full id is required.
+    assert s.model == "claude-fable-5"
+    assert s.call_timeout_s > PRESETS["fast"].call_timeout_s
+
+
+def test_settings_default_pack_is_one_row_per_call():
+    assert resolve_settings(None).pack == 1
+
+
 def test_cli_overrides_win_over_preset():
     s = resolve_settings("best", concurrency=4, model="haiku")
     assert s.concurrency == 4
