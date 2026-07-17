@@ -53,6 +53,13 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--concurrency", type=int, default=None, help="override parallel claude -p calls (1-2 on Pro)"
     )
+    ap.add_argument(
+        "--pack",
+        type=int,
+        default=None,
+        metavar="N",
+        help="pack N rows into each claude call to amortize the per-call prompt overhead (default 1)",
+    )
 
     ap.add_argument("--limit", type=int, default=None, help="process at most N rows (trial runs)")
     ap.add_argument(
@@ -133,8 +140,12 @@ def main(argv: list[str] | None = None) -> None:
         print(f"Missing required arguments: {', '.join(missing)}", file=sys.stderr)
         raise SystemExit(2)
 
+    if args.pack is not None and args.pack < 1:
+        print("--pack must be >= 1.", file=sys.stderr)
+        raise SystemExit(2)
+
     task = load_task(args.task)
-    settings = resolve_settings(args.preset, model=args.model, concurrency=args.concurrency)
+    settings = resolve_settings(args.preset, model=args.model, concurrency=args.concurrency, pack=args.pack)
     run_batch(
         input_path=args.input,
         output_path=args.output,

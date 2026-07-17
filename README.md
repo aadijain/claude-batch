@@ -116,6 +116,13 @@ Edit `src/claude_batch/config.py` to add presets or change the retry policy.
 - `--has-header` - treat the first row as a header.
 - `--preset` - model tier (`best` / `fast` / `cheap`, default `fast`).
 - `--model` / `--concurrency` - override the preset. Keep concurrency **1-2 on Pro**.
+- `--pack N` - pack N rows into each `claude` call (default 1). Each call carries a
+  fixed prompt overhead (the Claude Code harness is ~15K input tokens) that dwarfs a
+  short row, so packing 10-20 rows per call cuts total input tokens roughly N-fold.
+  Task-agnostic: rows are delimited by engine-owned `<<<ROW k>>>` markers the model
+  echoes back; the task's own sentinel still splits fields within a row. A row whose
+  marker is missing from the response is checkpointed as an error and retried on the
+  next run. Start with `--pack 10 --limit 20 --dry-run` to preview the packed calls.
 - `--limit N` - process only the first N rows (trial runs).
 - `--dry-run` - print the rendered prompt for every row in scope (and whether it
   would run, is already checkpointed, or is skipped as empty), then exit. Nothing is
@@ -199,6 +206,7 @@ itself is faked at the subprocess boundary and exercised for real by actual runs
 
 ## Cost / quota
 
-On Pro, `claude -p` draws subscription quota: **$0 cash but rate-limited**. The metered
-alternative is the Batches API (50% batch discount, no throttle) - needs API credits,
-separate from Pro.
+On Pro, `claude -p` draws subscription quota: **$0 cash but rate-limited**. Most of
+each call is fixed harness overhead, so `--pack` is the main lever for stretching the
+usage window (see Flags). The metered alternative is the Batches API (50% batch
+discount, no throttle) - needs API credits, separate from Pro.

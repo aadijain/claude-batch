@@ -37,6 +37,59 @@ def render_prompt(template: str, values: dict[str, str]) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
 
 
+# --- Row packing -------------------------------------------------------------
+# Engine-level (task-agnostic) batching: several rendered row prompts go into ONE
+# model call, delimited by a per-row marker the response must echo back. This
+# amortizes the fixed per-call prompt overhead (the claude harness dwarfs a short
+# row) across the pack. The task's own sentinel still splits fields WITHIN a row.
+
+_ROW_MARKER_RE = re.compile(r"^\s*<<<ROW (\d+)>>>\s*$")
+
+
+def row_marker(idx: int) -> str:
+    return f"<<<ROW {idx}>>>"
+
+
+def pack_prompts(items: list[tuple[int, str]]) -> str:
+    """Combine (row_index, rendered_prompt) pairs into one packed prompt."""
+    header = (
+        f"You are given {len(items)} independent items in one request. Handle each "
+        "item separately, exactly as if it were the only input.\n"
+        "Format your response as, for each item in order: a line containing exactly "
+        "the item's marker (e.g. <<<ROW 7>>>) and nothing else, then your complete "
+        "answer for that item. Output nothing before the first marker."
+    )
+    blocks = [f"{row_marker(idx)}\n{prompt}" for idx, prompt in items]
+    return header + "\n\n" + "\n\n".join(blocks)
+
+
+def split_packed(text: str, indices: list[int]) -> dict[int, str]:
+    """Split a packed response back into per-row chunks keyed by row index.
+
+    A row whose marker never appears is absent from the result (the caller
+    records it as an error so a re-run retries it). Any preamble before the
+    first marker, and chunks under markers not in `indices`, are dropped."""
+    want = set(indices)
+    parts: dict[int, str] = {}
+    cur: int | None = None
+    buf: list[str] = []
+
+    def flush() -> None:
+        if cur is not None and cur in want:
+            parts[cur] = "\n".join(buf).strip()
+
+    for line in text.splitlines():
+        m = _ROW_MARKER_RE.match(line)
+        if m:
+            flush()
+            cur = int(m.group(1))
+            buf = []
+        else:
+            buf.append(line)
+    flush()
+    return parts
+
+
 def split_fields(text: str, columns: tuple[str, ...], sentinel: str | None) -> dict[str, str]:
     """Split a model response into the task's output columns.
 

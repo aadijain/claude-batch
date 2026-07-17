@@ -78,7 +78,7 @@ def _run(tmp_path, monkeypatch, fake, rows, checkpoint_text=None, **kw):
         output_path=str(out),
         task=kw.pop("task", _task("{source}")),
         col_map={},
-        settings=Settings(model="haiku", concurrency=1),
+        settings=kw.pop("settings", Settings(model="haiku", concurrency=1)),
         **kw,
     )
     with open(out, newline="", encoding="utf-8") as f:
@@ -199,6 +199,58 @@ def test_run_batch_dry_run_calls_nothing_and_writes_nothing(tmp_path, monkeypatc
     assert "row 0: would run" in out and "row 1: skip (empty input)" in out
     assert not (tmp_path / "out.csv").exists()
     assert not (tmp_path / "out.csv.checkpoint.jsonl").exists()
+
+
+def _pack_settings(n):
+    return Settings(model="haiku", concurrency=1, pack=n)
+
+
+def test_run_batch_packed_rows_share_one_call(tmp_path, monkeypatch):
+    calls = []
+
+    def fake(prompt, *a, **k):
+        calls.append(prompt)
+        return "<<<ROW 0>>>\nout-a\n<<<ROW 1>>>\nout-b", 1.0
+
+    out_rows, done = _run(tmp_path, monkeypatch, fake, rows=[["a"], ["b"]], settings=_pack_settings(2))
+    assert len(calls) == 1
+    assert "<<<ROW 0>>>\na" in calls[0] and "<<<ROW 1>>>\nb" in calls[0]
+    assert [r[-1] for r in out_rows] == ["out-a", "out-b"]
+    assert done[0]["cost"] == 0.5 and done[1]["cost"] == 0.5
+
+
+def test_run_batch_packed_missing_row_becomes_error(tmp_path, monkeypatch):
+    def fake(prompt, *a, **k):
+        return "<<<ROW 0>>>\nout-a", 0.0
+
+    out_rows, done = _run(tmp_path, monkeypatch, fake, rows=[["a"], ["b"]], settings=_pack_settings(2))
+    assert done[0]["fields"]["out"] == "out-a" and not done[0]["error"]
+    assert done[1]["error"].startswith("pack:")
+    assert [r[-1] for r in out_rows] == ["out-a", ""]
+
+
+def test_run_batch_packed_call_error_marks_all_rows(tmp_path, monkeypatch):
+    def fake(prompt, *a, **k):
+        raise RuntimeError("error: boom")
+
+    _, done = _run(tmp_path, monkeypatch, fake, rows=[["a"], ["b"]], settings=_pack_settings(2))
+    assert done[0]["error"] == "error: boom" and done[1]["error"] == "error: boom"
+
+
+def test_run_batch_pack_lone_trailing_row_is_plain(tmp_path, monkeypatch):
+    # 3 rows at pack=2: the trailing single-row chunk gets its plain prompt,
+    # byte-identical to an unpacked run.
+    calls = []
+
+    def fake(prompt, *a, **k):
+        calls.append(prompt)
+        if "<<<ROW" in prompt:
+            return "<<<ROW 0>>>\nA\n<<<ROW 1>>>\nB", 0.0
+        return "C", 0.0
+
+    out_rows, _ = _run(tmp_path, monkeypatch, fake, rows=[["a"], ["b"], ["c"]], settings=_pack_settings(2))
+    assert len(calls) == 2 and calls[1] == "c"
+    assert [r[-1] for r in out_rows] == ["A", "B", "C"]
 
 
 def test_run_batch_stops_at_max_cost(tmp_path, monkeypatch, capsys):

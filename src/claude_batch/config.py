@@ -50,7 +50,8 @@ class Settings:
 
     model: str = "sonnet"  # claude-code model alias
     concurrency: int = 2  # keep 1-2 on a Pro plan
-    call_timeout_s: int = 240  # per-row hard timeout for the claude process
+    call_timeout_s: int = 240  # per-call hard timeout for the claude process
+    pack: int = 1  # rows packed into one claude call (see parse.pack_prompts); 1 = one row per call
 
     def overlay(self, **overrides) -> Settings:
         """Return a copy with the non-None overrides applied."""

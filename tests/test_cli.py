@@ -30,6 +30,12 @@ def test_version_flag(capsys):
     assert out.startswith("claude-batch ") and out.split()[1][0].isdigit()
 
 
+def test_pack_below_one_exits():
+    with pytest.raises(SystemExit) as exc:
+        main(["--input", "x.csv", "--output", "y.csv", "--task", "jp-translate", "--pack", "0"])
+    assert exc.value.code == 2
+
+
 def test_parse_col():
     assert _parse_col(["source=0", "context=jp"]) == {"source": "0", "context": "jp"}
     with pytest.raises(SystemExit):

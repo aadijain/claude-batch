@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .client import LimitReached, _print_lock, log, run_with_retries, terminate_children
 from .config import Settings, Task
-from .parse import render_prompt, split_fields, strip_html, template_vars
+from .parse import pack_prompts, render_prompt, split_fields, split_packed, strip_html, template_vars
 
 
 # --- Checkpoint -------------------------------------------------------------
@@ -273,6 +273,9 @@ def run_batch(
             f"Dry run: {would_run} of {len(work)} rows would run "
             f"(task={task.name}, model={settings.model}). Nothing was called or written."
         )
+        if would_run and settings.pack > 1:
+            calls = -(-would_run // settings.pack)
+            log(f"Packing: --pack {settings.pack} would send them in {calls} claude call(s).")
         return
 
     verify_or_stamp_meta(checkpoint_path, task, settings.model, data_rows)
@@ -283,10 +286,13 @@ def run_batch(
     todo = [w for w in work if w[2] and w[1].strip() and (w[0] not in done or done[w[0]].get("error"))]
     retries = sum(1 for w in todo if w[0] in done)
     ok_done = sum(1 for r in done.values() if not r.get("error"))
+    pack = max(1, settings.pack)
     log(
         f"{len(work)} rows in scope, {ok_done} already done, {len(todo)} to run"
         + (f" ({retries} error retries)" if retries else "")
-        + f" (task={task.name}, model={settings.model}, concurrency={settings.concurrency})."
+        + f" (task={task.name}, model={settings.model}, concurrency={settings.concurrency}"
+        + (f", pack={pack}" if pack > 1 else "")
+        + ")."
     )
 
     ckpt_lock = threading.Lock()
@@ -302,31 +308,8 @@ def run_batch(
     # those rows are abandoned (not checkpointed) and resume on the next run.
     hard_kill = threading.Event()
 
-    def worker(item):
-        idx, prompt, _ = item
-        if stop_event.is_set():  # a limit/interrupt already stopped the run; skip untouched
-            return None
-        try:
-            text, cost = run_with_retries(
-                prompt,
-                task.system_prompt_file,
-                settings.model,
-                settings.call_timeout_s,
-                stop_on_limit=stop_on_limit,
-            )
-            fields = split_fields(text, task.output_columns, task.sentinel)
-            rec = {"idx": idx, "fields": fields, "raw": text, "cost": cost, "error": ""}
-        except LimitReached:
-            # Don't checkpoint: the row was not attempted to completion, so a
-            # re-run retries it. Signal the rest of the pool to stop.
-            stop_reason[0] = stop_reason[0] or "limit"
-            stop_event.set()
-            return None
-        except Exception as e:  # noqa: BLE001 - record and continue
-            if hard_kill.is_set():
-                # The call was killed under our feet; leave the row for a re-run.
-                return None
-            rec = {"idx": idx, "fields": {}, "cost": 0.0, "error": str(e)[:300]}
+    def finish_row(rec):
+        """Checkpoint one row's record, update run accounting, print its line."""
         missed_sentinel = bool(
             not rec["error"]
             and task.sentinel
@@ -357,8 +340,50 @@ def run_batch(
         elapsed = time.monotonic() - start_t
         if n >= 2 and remaining > 0 and elapsed > 0:
             eta = f" (ETA {fmt_duration(remaining * elapsed / n)})"
-        log(f"  [{n}/{len(todo)}] {tag} row {idx}: {preview}{eta}")
-        return rec
+        log(f"  [{n}/{len(todo)}] {tag} row {rec['idx']}: {preview}{eta}")
+
+    def worker(chunk):
+        """One claude call for a chunk of 1..pack rows. A lone row gets its plain
+        prompt (identical to the unpacked path); a bigger chunk gets the packed
+        wrapper and the response is split back into per-row records."""
+        if stop_event.is_set():  # a limit/interrupt already stopped the run; skip untouched
+            return
+        indices = [idx for idx, _, _ in chunk]
+        prompt = chunk[0][1] if len(chunk) == 1 else pack_prompts([(i, p) for i, p, _ in chunk])
+        try:
+            text, cost = run_with_retries(
+                prompt,
+                task.system_prompt_file,
+                settings.model,
+                settings.call_timeout_s,
+                stop_on_limit=stop_on_limit,
+            )
+        except LimitReached:
+            # Don't checkpoint: the rows were not attempted to completion, so a
+            # re-run retries them. Signal the rest of the pool to stop.
+            stop_reason[0] = stop_reason[0] or "limit"
+            stop_event.set()
+            return
+        except Exception as e:  # noqa: BLE001 - record and continue
+            if hard_kill.is_set():
+                # The call was killed under our feet; leave the rows for a re-run.
+                return
+            msg = str(e)[:300]
+            for idx in indices:
+                finish_row({"idx": idx, "fields": {}, "cost": 0.0, "error": msg})
+            return
+        per_row = {indices[0]: text} if len(chunk) == 1 else split_packed(text, indices)
+        share = cost / len(chunk)
+        for idx in indices:
+            raw = per_row.get(idx, "")
+            if not raw.strip():
+                # The model dropped this row's marker; the error record makes a
+                # re-run retry just this row (alone or in a smaller pack).
+                err = "pack: row missing from packed response"
+                finish_row({"idx": idx, "fields": {}, "cost": share, "error": err})
+                continue
+            fields = split_fields(raw, task.output_columns, task.sentinel)
+            finish_row({"idx": idx, "fields": fields, "raw": raw, "cost": share, "error": ""})
 
     interrupted = [False]  # first Ctrl-C: drain. second: hard kill.
 
@@ -385,8 +410,9 @@ def run_batch(
         except ValueError:
             prev_handlers = {}
         try:
+            chunks = [todo[i : i + pack] for i in range(0, len(todo), pack)]
             with ThreadPoolExecutor(max_workers=max(1, settings.concurrency)) as pool:
-                futures = [pool.submit(worker, item) for item in todo]
+                futures = [pool.submit(worker, chunk) for chunk in chunks]
                 for _ in as_completed(futures):
                     pass
         finally:

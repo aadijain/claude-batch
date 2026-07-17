@@ -1,4 +1,11 @@
-from claude_batch.parse import render_prompt, split_fields, strip_html, template_vars
+from claude_batch.parse import (
+    pack_prompts,
+    render_prompt,
+    split_fields,
+    split_packed,
+    strip_html,
+    template_vars,
+)
 
 
 def test_strip_html_drops_tags_and_decodes_entities():
@@ -32,3 +39,24 @@ def test_split_two_columns_on_sentinel():
 def test_split_missing_sentinel_pads_empty():
     fields = split_fields("only translation", ("translation", "notes"), "---NOTES---")
     assert fields == {"translation": "only translation", "notes": ""}
+
+
+def test_pack_prompts_marks_each_row():
+    packed = pack_prompts([(0, "alpha"), (3, "beta\ngamma")])
+    assert "2 independent items" in packed
+    assert "<<<ROW 0>>>\nalpha" in packed
+    assert "<<<ROW 3>>>\nbeta\ngamma" in packed
+
+
+def test_split_packed_roundtrip():
+    response = "<<<ROW 0>>>\nout-a\n<<<ROW 3>>>\nout-b\nmore"
+    assert split_packed(response, [0, 3]) == {0: "out-a", 3: "out-b\nmore"}
+
+
+def test_split_packed_missing_row_absent():
+    assert split_packed("<<<ROW 0>>>\nonly", [0, 1]) == {0: "only"}
+
+
+def test_split_packed_drops_preamble_and_unexpected_markers():
+    text = "Sure, here you go:\n<<<ROW 2>>>\nx\n<<<ROW 9>>>\nnoise"
+    assert split_packed(text, [2]) == {2: "x"}
