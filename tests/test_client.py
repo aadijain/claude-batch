@@ -45,6 +45,22 @@ def test_call_claude_success_and_stdin_prompt(monkeypatch):
     assert proc.input == "the prompt"
 
 
+def test_call_claude_append_system_prompt_flag(monkeypatch):
+    # Passed through as --append-system-prompt when set; absent otherwise.
+    captured = {}
+
+    def fake_popen(cmd, **k):
+        captured["cmd"] = cmd
+        return FakeProc(stdout=json.dumps({"result": "ok", "total_cost_usd": 0.0}))
+
+    monkeypatch.setattr(client.subprocess, "Popen", fake_popen)
+    call_claude("p", None, "haiku", 5, append_system_prompt="ADDENDUM")
+    cmd = captured["cmd"]
+    assert cmd[cmd.index("--append-system-prompt") + 1] == "ADDENDUM"
+    call_claude("p", None, "haiku", 5)
+    assert "--append-system-prompt" not in captured["cmd"]
+
+
 def test_call_claude_is_error_limit_classified(monkeypatch):
     payload = {"is_error": True, "result": "", "subtype": "usage limit reached"}
     _fake_popen(monkeypatch, FakeProc(stdout=json.dumps(payload)))

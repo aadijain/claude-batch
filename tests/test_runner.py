@@ -237,6 +237,23 @@ def test_run_batch_packed_call_error_marks_all_rows(tmp_path, monkeypatch):
     assert done[0]["error"] == "error: boom" and done[1]["error"] == "error: boom"
 
 
+def test_run_batch_packed_call_carries_system_addendum(tmp_path, monkeypatch):
+    # Packed calls append the system-level packed contract; a lone trailing chunk
+    # (like any unpacked call) must not.
+    from claude_batch.parse import PACK_SYSTEM_ADDENDUM
+
+    appended = []
+
+    def fake(prompt, *a, **k):
+        appended.append(k.get("append_system_prompt"))
+        if "<<<ROW" in prompt:
+            return "<<<ROW 0>>>\nA\n<<<ROW 1>>>\nB", 0.0
+        return "C", 0.0
+
+    _run(tmp_path, monkeypatch, fake, rows=[["a"], ["b"], ["c"]], settings=_pack_settings(2))
+    assert appended == [PACK_SYSTEM_ADDENDUM, None]
+
+
 def test_run_batch_pack_lone_trailing_row_is_plain(tmp_path, monkeypatch):
     # 3 rows at pack=2: the trailing single-row chunk gets its plain prompt,
     # byte-identical to an unpacked run.

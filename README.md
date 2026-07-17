@@ -120,9 +120,11 @@ Edit `src/claude_batch/config.py` to add presets or change the retry policy.
   fixed prompt overhead (the Claude Code harness is ~15K input tokens) that dwarfs a
   short row, so packing 10-20 rows per call cuts total input tokens roughly N-fold.
   Task-agnostic: rows are delimited by engine-owned `<<<ROW k>>>` markers the model
-  echoes back; the task's own sentinel still splits fields within a row. A row whose
-  marker is missing from the response is checkpointed as an error and retried on the
-  next run. Start with `--pack 10 --limit 20 --dry-run` to preview the packed calls.
+  echoes back; the task's own sentinel still splits fields within a row, and packed
+  calls append a system-prompt addendum (`--append-system-prompt`) restating the
+  marker contract so strict task prompts don't fight it. A row whose marker is
+  missing from the response is checkpointed as an error and retried on the next
+  run. Start with `--pack 10 --limit 20 --dry-run` to preview the packed calls.
 - `--limit N` - process only the first N rows (trial runs).
 - `--dry-run` - print the rendered prompt for every row in scope (and whether it
   would run, is already checkpointed, or is skipped as empty), then exit. Nothing is

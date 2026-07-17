@@ -45,6 +45,18 @@ def render_prompt(template: str, values: dict[str, str]) -> str:
 
 _ROW_MARKER_RE = re.compile(r"^\s*<<<ROW (\d+)>>>\s*$")
 
+# Appended to the system prompt (claude -p --append-system-prompt) on packed calls
+# only. Task system prompts state their output contract in absolute terms ("the
+# first character of your response must be..."); this resolves the conflict with
+# the packed framing at the same authority level, so tasks stay packing-agnostic.
+PACK_SYSTEM_ADDENDUM = (
+    "The user message may contain several independent items, each introduced by a "
+    "marker line of the form <<<ROW k>>>. Apply all instructions above to each item "
+    "separately, and precede each item's answer with its exact marker on its own "
+    "line, in the same order as the items. Any rule above about the start or shape "
+    "of your response applies per item, immediately after its marker."
+)
+
 
 def row_marker(idx: int) -> str:
     return f"<<<ROW {idx}>>>"

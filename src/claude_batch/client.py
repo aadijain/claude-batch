@@ -47,7 +47,13 @@ def looks_like_limit(text: str) -> bool:
     return any(kw in low for kw in config.LIMIT_KEYWORDS)
 
 
-def call_claude(prompt: str, system_prompt_file: str | None, model: str, timeout_s: int) -> tuple[str, float]:
+def call_claude(
+    prompt: str,
+    system_prompt_file: str | None,
+    model: str,
+    timeout_s: int,
+    append_system_prompt: str | None = None,
+) -> tuple[str, float]:
     """Run one claude -p invocation. Returns (result_text, cost_usd).
     Raises RuntimeError('limit:...') for rate/usage limits, RuntimeError('error:...')
     for everything else, so the caller can pick the right backoff."""
@@ -56,6 +62,8 @@ def call_claude(prompt: str, system_prompt_file: str | None, model: str, timeout
     cmd = ["claude", "-p"]
     if system_prompt_file:
         cmd += ["--system-prompt-file", system_prompt_file]
+    if append_system_prompt:
+        cmd += ["--append-system-prompt", append_system_prompt]
     cmd += [
         "--model",
         model,
@@ -122,12 +130,13 @@ def run_with_retries(
     model: str,
     timeout_s: int,
     stop_on_limit: bool = False,
+    append_system_prompt: str | None = None,
 ) -> tuple[str, float]:
     general = 0
     limit = 0
     while True:
         try:
-            return call_claude(prompt, system_prompt_file, model, timeout_s)
+            return call_claude(prompt, system_prompt_file, model, timeout_s, append_system_prompt)
         except RuntimeError as e:
             msg = str(e)
             if msg.startswith("limit:"):

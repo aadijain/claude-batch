@@ -13,7 +13,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .client import LimitReached, _print_lock, log, run_with_retries, terminate_children
 from .config import Settings, Task
-from .parse import pack_prompts, render_prompt, split_fields, split_packed, strip_html, template_vars
+from .parse import (
+    PACK_SYSTEM_ADDENDUM,
+    pack_prompts,
+    render_prompt,
+    split_fields,
+    split_packed,
+    strip_html,
+    template_vars,
+)
 
 
 # --- Checkpoint -------------------------------------------------------------
@@ -357,6 +365,10 @@ def run_batch(
                 settings.model,
                 settings.call_timeout_s,
                 stop_on_limit=stop_on_limit,
+                # The system-level packed contract; without it, strict task system
+                # prompts ("the first character of your response must be...")
+                # contradict the marker framing and cause marker misses.
+                append_system_prompt=PACK_SYSTEM_ADDENDUM if len(chunk) > 1 else None,
             )
         except LimitReached:
             # Don't checkpoint: the rows were not attempted to completion, so a
