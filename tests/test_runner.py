@@ -91,7 +91,7 @@ def test_run_batch_retries_errored_rows(tmp_path, monkeypatch):
 
     def fake(prompt, *a, **k):
         called.append(prompt)
-        return "fixed", 0.0
+        return "fixed", 0.0, {}
 
     out_rows, done = _run(
         tmp_path,
@@ -123,7 +123,7 @@ def test_run_batch_skips_completed_rows(tmp_path, monkeypatch):
 
 
 def _ok(prompt, *a, **k):
-    return "ok:" + prompt, 0.0
+    return "ok:" + prompt, 0.0, {}
 
 
 def test_run_batch_stamps_meta_on_first_run(tmp_path, monkeypatch):
@@ -156,7 +156,7 @@ def test_run_batch_allows_appended_rows(tmp_path, monkeypatch):
 
     def fake(prompt, *a, **k):
         called.append(prompt)
-        return "ok", 0.0
+        return "ok", 0.0, {}
 
     _run(tmp_path, monkeypatch, fake, rows=[["a"]])
     out_rows, _ = _run(tmp_path, monkeypatch, fake, rows=[["a"], ["b"]])
@@ -210,7 +210,7 @@ def test_run_batch_packed_rows_share_one_call(tmp_path, monkeypatch):
 
     def fake(prompt, *a, **k):
         calls.append(prompt)
-        return "<<<ROW 0>>>\nout-a\n<<<ROW 1>>>\nout-b", 1.0
+        return "<<<ROW 0>>>\nout-a\n<<<ROW 1>>>\nout-b", 1.0, {}
 
     out_rows, done = _run(tmp_path, monkeypatch, fake, rows=[["a"], ["b"]], settings=_pack_settings(2))
     assert len(calls) == 1
@@ -221,7 +221,7 @@ def test_run_batch_packed_rows_share_one_call(tmp_path, monkeypatch):
 
 def test_run_batch_packed_missing_row_becomes_error(tmp_path, monkeypatch):
     def fake(prompt, *a, **k):
-        return "<<<ROW 0>>>\nout-a", 0.0
+        return "<<<ROW 0>>>\nout-a", 0.0, {}
 
     out_rows, done = _run(tmp_path, monkeypatch, fake, rows=[["a"], ["b"]], settings=_pack_settings(2))
     assert done[0]["fields"]["out"] == "out-a" and not done[0]["error"]
@@ -237,6 +237,18 @@ def test_run_batch_packed_call_error_marks_all_rows(tmp_path, monkeypatch):
     assert done[0]["error"] == "error: boom" and done[1]["error"] == "error: boom"
 
 
+def test_run_batch_records_usage_split_across_pack(tmp_path, monkeypatch):
+    # One packed call's tokens are split into integer per-row shares (remainder on
+    # the first), so record sums always equal the call's true totals.
+    def fake(prompt, *a, **k):
+        usage = {"input_tokens": 5, "output_tokens": 2}
+        return "<<<ROW 0>>>\nout-a\n<<<ROW 1>>>\nout-b", 0.0, usage
+
+    _, done = _run(tmp_path, monkeypatch, fake, rows=[["a"], ["b"]], settings=_pack_settings(2))
+    assert done[0]["usage"] == {"input_tokens": 3, "output_tokens": 1}
+    assert done[1]["usage"] == {"input_tokens": 2, "output_tokens": 1}
+
+
 def test_run_batch_packed_call_carries_system_addendum(tmp_path, monkeypatch):
     # Packed calls append the system-level packed contract; a lone trailing chunk
     # (like any unpacked call) must not.
@@ -247,8 +259,8 @@ def test_run_batch_packed_call_carries_system_addendum(tmp_path, monkeypatch):
     def fake(prompt, *a, **k):
         appended.append(k.get("append_system_prompt"))
         if "<<<ROW" in prompt:
-            return "<<<ROW 0>>>\nA\n<<<ROW 1>>>\nB", 0.0
-        return "C", 0.0
+            return "<<<ROW 0>>>\nA\n<<<ROW 1>>>\nB", 0.0, {}
+        return "C", 0.0, {}
 
     _run(tmp_path, monkeypatch, fake, rows=[["a"], ["b"], ["c"]], settings=_pack_settings(2))
     assert appended == [PACK_SYSTEM_ADDENDUM, None]
@@ -262,8 +274,8 @@ def test_run_batch_pack_lone_trailing_row_is_plain(tmp_path, monkeypatch):
     def fake(prompt, *a, **k):
         calls.append(prompt)
         if "<<<ROW" in prompt:
-            return "<<<ROW 0>>>\nA\n<<<ROW 1>>>\nB", 0.0
-        return "C", 0.0
+            return "<<<ROW 0>>>\nA\n<<<ROW 1>>>\nB", 0.0, {}
+        return "C", 0.0, {}
 
     out_rows, _ = _run(tmp_path, monkeypatch, fake, rows=[["a"], ["b"], ["c"]], settings=_pack_settings(2))
     assert len(calls) == 2 and calls[1] == "c"
@@ -275,7 +287,7 @@ def test_run_batch_stops_at_max_cost(tmp_path, monkeypatch, capsys):
 
     def fake(prompt, *a, **k):
         called.append(prompt)
-        return "ok", 1.0
+        return "ok", 1.0, {}
 
     out_rows, done = _run(tmp_path, monkeypatch, fake, rows=[["a"], ["b"], ["c"]], max_cost=1.0)
     # concurrency=1: the first row hits the budget, the rest are never called.
@@ -313,8 +325,10 @@ def test_print_status_no_checkpoint(tmp_path, capsys):
 def test_print_status_with_totals(tmp_path, capsys):
     ckpt = tmp_path / "c.jsonl"
     ckpt.write_text(
-        '{"idx": 0, "fields": {"out": "hi"}, "cost": 0.01, "error": ""}\n'
-        '{"idx": 1, "fields": {}, "cost": 0.0, "error": "boom"}\n',
+        '{"idx": 0, "fields": {"out": "hi"}, "cost": 0.01, '
+        '"usage": {"input_tokens": 1000, "output_tokens": 50}, "error": ""}\n'
+        '{"idx": 1, "fields": {}, "cost": 0.0, '
+        '"usage": {"input_tokens": 500, "output_tokens": 25}, "error": "boom"}\n',
         encoding="utf-8",
     )
     inp = tmp_path / "in.csv"
@@ -325,3 +339,5 @@ def test_print_status_with_totals(tmp_path, capsys):
     assert "2 remaining" in out
     assert "1 ok, 1 errors" in out
     assert "$0.0100" in out
+    # Usage summed across records; records without usage (old checkpoints) count 0.
+    assert "1,500 in, 75 out" in out

@@ -32,6 +32,22 @@ def terminate_children() -> None:
             pass
 
 
+# Token counts extracted from the claude JSON `usage` block, stored per checkpoint
+# record. Keys mirror the claude output. On Pro, tokens (not dollars) are the real
+# spend: they measure quota consumption and what --pack saves.
+USAGE_KEYS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+)
+
+
+def extract_usage(data: dict) -> dict[str, int]:
+    u = data.get("usage") or {}
+    return {k: int(u.get(k) or 0) for k in USAGE_KEYS}
+
+
 class LimitReached(RuntimeError):
     """A rate/usage limit was hit while `--stop-on-limit` is set: stop instead of
     backing off, so the run can be resumed manually later from the checkpoint."""
@@ -53,8 +69,8 @@ def call_claude(
     model: str,
     timeout_s: int,
     append_system_prompt: str | None = None,
-) -> tuple[str, float]:
-    """Run one claude -p invocation. Returns (result_text, cost_usd).
+) -> tuple[str, float, dict[str, int]]:
+    """Run one claude -p invocation. Returns (result_text, cost_usd, usage_tokens).
     Raises RuntimeError('limit:...') for rate/usage limits, RuntimeError('error:...')
     for everything else, so the caller can pick the right backoff."""
     # The prompt goes over stdin (claude -p reads it when the positional is
@@ -117,7 +133,7 @@ def call_claude(
             blob = json.dumps(data)
             kind = "limit" if looks_like_limit(blob) else "error"
             raise RuntimeError(f"{kind}: {data.get('subtype') or blob[:200]}")
-        return text, cost
+        return text, cost, extract_usage(data)
 
     blob = (stdout + "\n" + stderr).strip() or f"exit {proc.returncode}"
     kind = "limit" if looks_like_limit(blob) else "error"
@@ -131,7 +147,7 @@ def run_with_retries(
     timeout_s: int,
     stop_on_limit: bool = False,
     append_system_prompt: str | None = None,
-) -> tuple[str, float]:
+) -> tuple[str, float, dict[str, int]]:
     general = 0
     limit = 0
     while True:

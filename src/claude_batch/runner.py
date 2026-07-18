@@ -11,7 +11,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from .client import LimitReached, _print_lock, log, run_with_retries, terminate_children
+from .client import USAGE_KEYS, LimitReached, _print_lock, log, run_with_retries, terminate_children
 from .config import Settings, Task
 from .parse import (
     PACK_SYSTEM_ADDENDUM,
@@ -158,6 +158,36 @@ def print_status(
         print(f"Progress:   {len(done)} rows recorded (pass --input for a total)")
     print(f"Results:    {ok} ok, {errors} errors")
     print(f"Cost:       ${cost:.4f} (reported API cost; $0 if drawn from a subscription)")
+    print(f"Tokens:     {fmt_tokens(sum_usage(done.values()))}")
+
+
+def split_usage(usage: dict[str, int], n: int) -> list[dict[str, int]]:
+    """Split one call's token usage into n integer shares (remainder on the first),
+    so per-record shares always sum to the call's true totals."""
+    shares = [{k: v // n for k, v in usage.items()} for _ in range(n)]
+    for k, v in usage.items():
+        shares[0][k] += v % n
+    return shares
+
+
+def sum_usage(records) -> dict[str, int]:
+    totals = dict.fromkeys(USAGE_KEYS, 0)
+    for rec in records:
+        u = rec.get("usage") or {}
+        for k in USAGE_KEYS:
+            totals[k] += int(u.get(k) or 0)
+    return totals
+
+
+def fmt_tokens(usage: dict[str, int]) -> str:
+    def g(key: str) -> int:
+        return int(usage.get(key) or 0)
+
+    return (
+        f"{g('input_tokens'):,} in, {g('output_tokens'):,} out "
+        f"(+{g('cache_creation_input_tokens'):,} cache write, "
+        f"{g('cache_read_input_tokens'):,} cache read)"
+    )
 
 
 def fmt_duration(seconds: float) -> str:
@@ -305,6 +335,7 @@ def run_batch(
 
     ckpt_lock = threading.Lock()
     total_cost = [0.0]
+    run_usage = dict.fromkeys(USAGE_KEYS, 0)  # this run's token totals (guarded by _print_lock)
     completed = [0]
     start_t = time.monotonic()
     sentinel_misses = [0]  # rows whose response lacked the sentinel (trailing cols empty)
@@ -328,6 +359,8 @@ def run_batch(
         hit_budget = False
         with _print_lock:
             total_cost[0] += rec["cost"]
+            for k in USAGE_KEYS:
+                run_usage[k] += int((rec.get("usage") or {}).get(k) or 0)
             completed[0] += 1
             n = completed[0]
             if missed_sentinel:
@@ -359,7 +392,7 @@ def run_batch(
         indices = [idx for idx, _, _ in chunk]
         prompt = chunk[0][1] if len(chunk) == 1 else pack_prompts([(i, p) for i, p, _ in chunk])
         try:
-            text, cost = run_with_retries(
+            text, cost, usage = run_with_retries(
                 prompt,
                 task.system_prompt_file,
                 settings.model,
@@ -386,16 +419,27 @@ def run_batch(
             return
         per_row = {indices[0]: text} if len(chunk) == 1 else split_packed(text, indices)
         share = cost / len(chunk)
-        for idx in indices:
+        usage_shares = split_usage(usage, len(chunk))
+        for pos, idx in enumerate(indices):
             raw = per_row.get(idx, "")
             if not raw.strip():
                 # The model dropped this row's marker; the error record makes a
                 # re-run retry just this row (alone or in a smaller pack).
                 err = "pack: row missing from packed response"
-                finish_row({"idx": idx, "fields": {}, "cost": share, "error": err})
+                rec = {"idx": idx, "fields": {}, "cost": share, "usage": usage_shares[pos], "error": err}
+                finish_row(rec)
                 continue
             fields = split_fields(raw, task.output_columns, task.sentinel)
-            finish_row({"idx": idx, "fields": fields, "raw": raw, "cost": share, "error": ""})
+            finish_row(
+                {
+                    "idx": idx,
+                    "fields": fields,
+                    "raw": raw,
+                    "cost": share,
+                    "usage": usage_shares[pos],
+                    "error": "",
+                }
+            )
 
     interrupted = [False]  # first Ctrl-C: drain. second: hard kill.
 
@@ -459,7 +503,8 @@ def run_batch(
     log(
         f"\n{headline} Wrote {output_path}. "
         f"Completed {len(done) - errors}/{len(work)} rows, {errors} errors. "
-        f"Reported API cost: ${total_cost[0]:.4f} (this run; $0 if drawn from the Pro subscription)."
+        f"Reported API cost: ${total_cost[0]:.4f} (this run; $0 if drawn from the Pro subscription). "
+        f"Tokens this run: {fmt_tokens(run_usage)}."
     )
     if sentinel_misses[0]:
         log(

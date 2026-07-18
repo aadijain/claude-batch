@@ -39,10 +39,33 @@ def _fake_popen(monkeypatch, proc):
 def test_call_claude_success_and_stdin_prompt(monkeypatch):
     proc = FakeProc(stdout=json.dumps({"result": "hello", "total_cost_usd": 0.01}))
     _fake_popen(monkeypatch, proc)
-    text, cost = call_claude("the prompt", None, "haiku", 5)
+    text, cost, usage = call_claude("the prompt", None, "haiku", 5)
     assert (text, cost) == ("hello", 0.01)
+    assert usage["input_tokens"] == 0  # no usage block in the payload -> zeros
     # The prompt must travel over stdin, never argv (ps exposure / ARG_MAX).
     assert proc.input == "the prompt"
+
+
+def test_call_claude_parses_usage(monkeypatch):
+    payload = {
+        "result": "hi",
+        "total_cost_usd": 0.0,
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "cache_creation_input_tokens": 30,
+            "cache_read_input_tokens": 40,
+            "server_tool_use": {"web_search_requests": 0},  # nested extras ignored
+        },
+    }
+    _fake_popen(monkeypatch, FakeProc(stdout=json.dumps(payload)))
+    _, _, usage = call_claude("p", None, "haiku", 5)
+    assert usage == {
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "cache_creation_input_tokens": 30,
+        "cache_read_input_tokens": 40,
+    }
 
 
 def test_call_claude_append_system_prompt_flag(monkeypatch):
@@ -99,11 +122,11 @@ def test_run_with_retries_without_stop_on_limit_backs_off(monkeypatch):
         calls.append(1)
         if len(calls) == 1:
             raise RuntimeError("limit: usage limit reached")
-        return "ok", 0.0
+        return "ok", 0.0, {}
 
     monkeypatch.setattr(client, "call_claude", fake_call)
     monkeypatch.setattr(client.time, "sleep", lambda *_: None)
-    assert run_with_retries("p", None, "haiku", 1) == ("ok", 0.0)
+    assert run_with_retries("p", None, "haiku", 1) == ("ok", 0.0, {})
     assert len(calls) == 2
 
 
@@ -114,12 +137,12 @@ def test_run_with_retries_general_error_retried_then_succeeds(monkeypatch):
         calls.append(1)
         if len(calls) < 3:
             raise RuntimeError("error: transient")
-        return "ok", 0.0
+        return "ok", 0.0, {}
 
     sleeps = []
     monkeypatch.setattr(client, "call_claude", fake_call)
     monkeypatch.setattr(client.time, "sleep", sleeps.append)
-    assert run_with_retries("p", None, "haiku", 1) == ("ok", 0.0)
+    assert run_with_retries("p", None, "haiku", 1) == ("ok", 0.0, {})
     # Exponential backoff: base, then double.
     assert sleeps == [config.GENERAL_SLEEP_BASE_S, config.GENERAL_SLEEP_BASE_S * 2]
 

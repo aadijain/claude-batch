@@ -138,7 +138,7 @@ Edit `src/claude_batch/config.py` to add presets or change the retry policy.
 - `--checkpoint` - JSONL progress file (defaults to `<output>.checkpoint.jsonl`).
 - `--list-tasks` - print built-in tasks and exit.
 - `--show-task TASK` - print a task's template, output columns, and sentinel, then exit.
-- `--status` - print checkpoint progress (done / remaining / errors / cost) for
+- `--status` - print checkpoint progress (done / remaining / errors / cost / tokens) for
   `--output` (or `--checkpoint`) and exit, without running. Read-only, so it is safe
   to point at a run in progress in another terminal. Pass `--input` for a row total.
 - `--version` - print the installed version and exit.
@@ -149,7 +149,9 @@ with just the task prompt, `--max-turns 1`, all tools disabled, `--output-format
 ## Output
 
 - **Checkpoint** (`<output>.checkpoint.jsonl`) - one JSON record per row
-  (`idx`, `fields`, `raw`, `cost`, `error`), written the instant each row finishes.
+  (`idx`, `fields`, `raw`, `cost`, `usage` token counts, `error`), written the
+  instant each row finishes. Packed calls split cost and tokens across their rows
+  (tokens as integer shares that sum exactly).
   **The source of truth for progress** - safe if the run is killed. The first record
   is a meta stamp (task, model, input row fingerprint) used to refuse a resume
   against the wrong task or a changed input.
@@ -209,7 +211,9 @@ itself is faked at the subprocess boundary and exercised for real by actual runs
 
 ## Cost / quota
 
-On Pro, `claude -p` draws subscription quota: **$0 cash but rate-limited**. Most of
-each call is fixed harness overhead, so `--pack` is the main lever for stretching the
-usage window (see Flags). The metered alternative is the Batches API (50% batch
+On Pro, `claude -p` draws subscription quota: **$0 cash but rate-limited**, so the
+number that matters is tokens, not dollars: per-row `usage` is checkpointed, and the
+run summary and `--status` print token totals (in / out / cache write / cache read).
+Most of each call is fixed harness overhead, so `--pack` is the main lever for
+stretching the usage window (see Flags). The metered alternative is the Batches API (50% batch
 discount, no throttle) - needs API credits, separate from Pro.
