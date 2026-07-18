@@ -125,7 +125,9 @@ Edit `src/claude_batch/config.py` to add presets or change the retry policy.
   calls append a system-prompt addendum (`--append-system-prompt`) restating the
   marker contract so strict task prompts don't fight it. A row whose marker is
   missing from the response is checkpointed as an error and retried on the next
-  run. Start with `--pack 10 --limit 20 --dry-run` to preview the packed calls.
+  run. The per-call timeout automatically gains headroom per packed row
+  (`PACK_EXTRA_TIMEOUT_PER_ROW_S` in `config.py`, since one call answers N rows
+  serially). Start with `--pack 10 --limit 20 --dry-run` to preview the packed calls.
 - `--limit N` - process only the first N rows (trial runs).
 - `--dry-run` - print the rendered prompt for every row in scope (and whether it
   would run, is already checkpointed, or is skipped as empty), then exit. Nothing is

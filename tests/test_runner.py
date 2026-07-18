@@ -237,6 +237,24 @@ def test_run_batch_packed_call_error_marks_all_rows(tmp_path, monkeypatch):
     assert done[0]["error"] == "error: boom" and done[1]["error"] == "error: boom"
 
 
+def test_run_batch_packed_timeout_scales_with_chunk(tmp_path, monkeypatch):
+    # The base timeout is sized for one row; a packed call gets per-row headroom.
+    from claude_batch.config import PACK_EXTRA_TIMEOUT_PER_ROW_S
+
+    seen = []
+
+    def fake(prompt, sysf, model, timeout_s, **k):
+        seen.append(timeout_s)
+        if "<<<ROW" in prompt:
+            return "<<<ROW 0>>>\nA\n<<<ROW 1>>>\nB", 0.0, {}
+        return "C", 0.0, {}
+
+    settings = _pack_settings(2)
+    _run(tmp_path, monkeypatch, fake, rows=[["a"], ["b"], ["c"]], settings=settings)
+    base = settings.call_timeout_s
+    assert seen == [base + PACK_EXTRA_TIMEOUT_PER_ROW_S, base]
+
+
 def test_run_batch_records_usage_split_across_pack(tmp_path, monkeypatch):
     # One packed call's tokens are split into integer per-row shares (remainder on
     # the first), so record sums always equal the call's true totals.

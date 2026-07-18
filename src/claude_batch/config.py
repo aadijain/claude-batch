@@ -25,6 +25,11 @@ TASKS_DIR = os.path.join(PKG_DIR, "tasks")  # built-in task .toml files ship her
 # Tools no batch prompt needs; disabling them removes any agentic tool detour.
 DISALLOWED_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch,WebView,TodoWrite,Task,NotebookEdit"
 
+# Extra per-row timeout headroom for packed calls: one call generating N outputs
+# takes roughly N times as long, but Settings.call_timeout_s is sized for one row.
+# Effective timeout = call_timeout_s + (rows_in_chunk - 1) * this.
+PACK_EXTRA_TIMEOUT_PER_ROW_S = 30
+
 MAX_GENERAL_RETRIES = 4  # transient errors (parse/timeout/etc.)
 MAX_LIMIT_RETRIES = 24  # rate/usage-limit retries (ride out Pro windows)
 LIMIT_SLEEP_BASE_S = 60  # first limit backoff; doubles up to the cap

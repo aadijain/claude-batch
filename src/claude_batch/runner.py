@@ -12,7 +12,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .client import USAGE_KEYS, LimitReached, _print_lock, log, run_with_retries, terminate_children
-from .config import Settings, Task
+from .config import PACK_EXTRA_TIMEOUT_PER_ROW_S, Settings, Task
 from .parse import (
     PACK_SYSTEM_ADDENDUM,
     pack_prompts,
@@ -391,12 +391,15 @@ def run_batch(
             return
         indices = [idx for idx, _, _ in chunk]
         prompt = chunk[0][1] if len(chunk) == 1 else pack_prompts([(i, p) for i, p, _ in chunk])
+        # One call generates len(chunk) outputs serially; give it timeout headroom
+        # to match, so the base stays sized for a single row.
+        timeout_s = settings.call_timeout_s + (len(chunk) - 1) * PACK_EXTRA_TIMEOUT_PER_ROW_S
         try:
             text, cost, usage = run_with_retries(
                 prompt,
                 task.system_prompt_file,
                 settings.model,
-                settings.call_timeout_s,
+                timeout_s,
                 stop_on_limit=stop_on_limit,
                 # The system-level packed contract; without it, strict task system
                 # prompts ("the first character of your response must be...")
