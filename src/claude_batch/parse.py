@@ -63,6 +63,12 @@ def row_marker(idx: int) -> str:
     return f"<<<ROW {idx}>>>"
 
 
+def _packed(header: str, items: list[tuple[int, str]]) -> str:
+    """Join a pack header with the marker-introduced per-row prompt blocks."""
+    blocks = [f"{row_marker(idx)}\n{prompt}" for idx, prompt in items]
+    return header + "\n\n" + "\n\n".join(blocks)
+
+
 def pack_prompts(items: list[tuple[int, str]]) -> str:
     """Combine (row_index, rendered_prompt) pairs into one packed prompt."""
     header = (
@@ -72,8 +78,7 @@ def pack_prompts(items: list[tuple[int, str]]) -> str:
         "the item's marker (e.g. <<<ROW 7>>>) and nothing else, then your complete "
         "answer for that item. Output nothing before the first marker."
     )
-    blocks = [f"{row_marker(idx)}\n{prompt}" for idx, prompt in items]
-    return header + "\n\n" + "\n\n".join(blocks)
+    return _packed(header, items)
 
 
 def split_packed(text: str, indices: list[int]) -> dict[int, str]:
@@ -127,7 +132,7 @@ def split_fields(text: str, columns: tuple[str, ...], sentinel: str | None) -> d
             cur.append(line)
     chunks.append("\n".join(cur).strip())
     chunks = (chunks + [""] * n)[:n]
-    return dict(zip(columns, chunks, strict=False))
+    return dict(zip(columns, chunks, strict=True))
 
 
 # --- JSON output mode --------------------------------------------------------
@@ -177,8 +182,7 @@ def pack_prompts_json(items: list[tuple[int, str]]) -> str:
         f'carrying the item\'s k as an integer "{PACK_ROW_KEY}" key. Output nothing '
         "outside the array."
     )
-    blocks = [f"{row_marker(idx)}\n{prompt}" for idx, prompt in items]
-    return header + "\n\n" + "\n\n".join(blocks)
+    return _packed(header, items)
 
 
 def extract_json(text: str):

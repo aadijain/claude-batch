@@ -10,6 +10,7 @@ import signal
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 
 from .client import USAGE_KEYS, LimitReached, _print_lock, log, run_with_retries, terminate_children
 from .config import PACK_EXTRA_TIMEOUT_PER_ROW_S, Settings, Task
@@ -29,8 +30,16 @@ from .parse import (
     template_vars,
 )
 
+# Both the status report and the run summary quote reported API cost; on a
+# subscription plan the CLI reports $0 and tokens are the real spend.
+COST_NOTE = "$0 if drawn from a subscription"
+
 
 # --- Checkpoint -------------------------------------------------------------
+def default_checkpoint(output_path: str) -> str:
+    return output_path + ".checkpoint.jsonl"
+
+
 def load_checkpoint(path: str) -> dict[int, dict]:
     done: dict[int, dict] = {}
     if not os.path.exists(path):
@@ -48,8 +57,9 @@ def load_checkpoint(path: str) -> dict[int, dict]:
     return done
 
 
-def append_checkpoint(path: str, rec: dict, lock: threading.Lock) -> None:
-    with lock:
+def append_checkpoint(path: str, rec: dict, lock: threading.Lock | None = None) -> None:
+    """Append one record; pass a lock when multiple threads share the file."""
+    with lock or nullcontext():
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
@@ -95,7 +105,7 @@ def verify_or_stamp_meta(checkpoint_path: str, task: Task, model: str, data_rows
             "input_rows": len(data_rows),
             "rows_sha256": rows_fingerprint(data_rows, len(data_rows)),
         }
-        append_checkpoint(checkpoint_path, rec, threading.Lock())
+        append_checkpoint(checkpoint_path, rec)
         return
 
     if meta.get("task") and meta["task"] != task.name:
@@ -127,7 +137,7 @@ def verify_or_stamp_meta(checkpoint_path: str, task: Task, model: str, data_rows
 
 def print_status(
     *,
-    output_path: str,
+    output_path: str | None = None,
     checkpoint_path: str | None = None,
     input_path: str | None = None,
     has_header: bool = False,
@@ -135,14 +145,17 @@ def print_status(
 ) -> None:
     """Read-only progress report from the checkpoint. Safe to run against a live
     run in another terminal: the checkpoint is the durable source of truth."""
-    checkpoint_path = checkpoint_path or (output_path + ".checkpoint.jsonl")
+    if checkpoint_path is None:
+        if output_path is None:
+            raise SystemExit("--status needs --output (or --checkpoint) to locate the checkpoint.")
+        checkpoint_path = default_checkpoint(output_path)
     if not os.path.exists(checkpoint_path):
         print(f"No checkpoint at {checkpoint_path} (run not started, or nothing done yet).")
         return
 
     done = load_checkpoint(checkpoint_path)
     errors = sum(1 for r in done.values() if r.get("error"))
-    cost = sum(float(r.get("cost") or 0.0) for r in done.values())
+    cost = sum_cost(done.values())
     ok = len(done) - errors
 
     total: int | None = None
@@ -163,8 +176,12 @@ def print_status(
     else:
         print(f"Progress:   {len(done)} rows recorded (pass --input for a total)")
     print(f"Results:    {ok} ok, {errors} errors")
-    print(f"Cost:       ${cost:.4f} (reported API cost; $0 if drawn from a subscription)")
+    print(f"Cost:       ${cost:.4f} (reported API cost; {COST_NOTE})")
     print(f"Tokens:     {fmt_tokens(sum_usage(done.values()))}")
+
+
+def sum_cost(records) -> float:
+    return sum(float(r.get("cost") or 0.0) for r in records)
 
 
 def split_usage(usage: dict[str, int], n: int) -> list[dict[str, int]]:
@@ -278,7 +295,7 @@ def run_batch(
 ) -> None:
     """Run `task` over `input_path` row by row and write `output_path`. Resumable
     via the JSONL checkpoint, which is the durable source of truth for progress."""
-    checkpoint_path = checkpoint_path or (output_path + ".checkpoint.jsonl")
+    checkpoint_path = checkpoint_path or default_checkpoint(output_path)
 
     with open(input_path, newline="", encoding="utf-8") as f:
         rows = list(csv.reader(f))
@@ -297,6 +314,10 @@ def run_batch(
         val = row[idx].strip() if idx < len(row) else ""
         return val if keep_html else strip_html(val)
 
+    def runnable(prompt: str, has_input: bool) -> bool:
+        """A row is real work only if its primary input and rendered prompt are non-empty."""
+        return has_input and bool(prompt.strip())
+
     # data_rows[:None] is the whole list, so no limit means every row.
     work = []
     for i, row in enumerate(data_rows[:limit]):
@@ -310,7 +331,7 @@ def run_batch(
         done = load_checkpoint(checkpoint_path)
         would_run = 0
         for idx, prompt, has_input in work:
-            if not has_input or not prompt.strip():
+            if not runnable(prompt, has_input):
                 status = "skip (empty input)"
             elif idx in done and not done[idx].get("error"):
                 status = "done (checkpointed)"
@@ -334,7 +355,7 @@ def run_batch(
     done = load_checkpoint(checkpoint_path)
     # Errored rows are re-attempted: the checkpoint is append-only and the last
     # record per idx wins, so a successful retry replaces the error record.
-    todo = [w for w in work if w[2] and w[1].strip() and (w[0] not in done or done[w[0]].get("error"))]
+    todo = [w for w in work if runnable(w[1], w[2]) and (w[0] not in done or done[w[0]].get("error"))]
     retries = sum(1 for w in todo if w[0] in done)
     ok_done = sum(1 for r in done.values() if not r.get("error"))
     pack = max(1, settings.pack)
@@ -574,7 +595,7 @@ def run_batch(
     log(
         f"\n{headline} Wrote {output_path}. "
         f"Completed {len(done) - errors}/{len(work)} rows, {errors} errors. "
-        f"Reported API cost: ${total_cost[0]:.4f} (this run; $0 if drawn from the Pro subscription). "
+        f"Reported API cost: ${total_cost[0]:.4f} (this run; {COST_NOTE}). "
         f"Tokens this run: {fmt_tokens(run_usage)}."
     )
     if sentinel_misses[0]:

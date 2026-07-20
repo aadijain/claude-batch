@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+from typing import NoReturn
 
 from . import config
 
@@ -28,7 +29,7 @@ def terminate_children() -> None:
     for p in procs:
         try:
             os.killpg(p.pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError, OSError):
+        except OSError:
             pass
 
 
@@ -61,6 +62,12 @@ def log(msg: str) -> None:
 def looks_like_limit(text: str) -> bool:
     low = text.lower()
     return any(kw in low for kw in config.LIMIT_KEYWORDS)
+
+
+def _raise_classified(blob: str, detail: str | None = None) -> NoReturn:
+    """Raise the failure as limit/error so the caller picks the right backoff."""
+    kind = "limit" if looks_like_limit(blob) else "error"
+    raise RuntimeError(f"{kind}: {detail or blob[:200]}")
 
 
 def call_claude(
@@ -130,14 +137,10 @@ def call_claude(
         text = (data.get("result") or "").strip()
         cost = float(data.get("total_cost_usd") or 0.0)
         if is_error or not text:
-            blob = json.dumps(data)
-            kind = "limit" if looks_like_limit(blob) else "error"
-            raise RuntimeError(f"{kind}: {data.get('subtype') or blob[:200]}")
+            _raise_classified(json.dumps(data), data.get("subtype"))
         return text, cost, extract_usage(data)
 
-    blob = (stdout + "\n" + stderr).strip() or f"exit {proc.returncode}"
-    kind = "limit" if looks_like_limit(blob) else "error"
-    raise RuntimeError(f"{kind}: {blob[:200]}")
+    _raise_classified((stdout + "\n" + stderr).strip() or f"exit {proc.returncode}")
 
 
 def run_with_retries(

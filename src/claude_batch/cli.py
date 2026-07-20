@@ -127,9 +127,6 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.status:
-        if args.output is None and args.checkpoint is None:
-            print("--status needs --output (or --checkpoint) to locate the checkpoint.", file=sys.stderr)
-            raise SystemExit(2)
         print_status(
             output_path=args.output,
             checkpoint_path=args.checkpoint,
