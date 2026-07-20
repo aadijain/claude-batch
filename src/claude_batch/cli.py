@@ -6,7 +6,8 @@ import argparse
 import sys
 
 from .config import PRESETS, builtin_tasks, load_task, resolve_settings
-from .runner import print_status, run_batch
+from .report import print_status
+from .runner import run_batch
 
 
 def _parse_col(pairs: list[str]) -> dict[str, str]:

@@ -3,8 +3,10 @@ import csv
 import pytest
 
 from claude_batch import runner
+from claude_batch.checkpoint import load_checkpoint
 from claude_batch.config import Settings, Task
-from claude_batch.runner import load_checkpoint, print_status, resolve_col, resolve_col_map, run_batch
+from claude_batch.report import print_status
+from claude_batch.runner import resolve_col, resolve_col_map, run_batch
 
 
 def _task(template, cols=("out",)):
@@ -127,7 +129,7 @@ def _ok(prompt, *a, **k):
 
 
 def test_run_batch_stamps_meta_on_first_run(tmp_path, monkeypatch):
-    from claude_batch.runner import load_meta
+    from claude_batch.checkpoint import load_meta
 
     _run(tmp_path, monkeypatch, _ok, rows=[["a"]])
     meta = load_meta(str(tmp_path / "out.csv.checkpoint.jsonl"))
@@ -455,7 +457,7 @@ def test_run_batch_stops_at_max_cost(tmp_path, monkeypatch, capsys):
 
 
 def test_fmt_duration():
-    from claude_batch.runner import fmt_duration
+    from claude_batch.report import fmt_duration
 
     assert fmt_duration(5) == "5s"
     assert fmt_duration(65) == "1m05s"

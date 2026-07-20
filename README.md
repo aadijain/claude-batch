@@ -16,6 +16,8 @@ src/claude_batch/      installable package
   config.py            model PRESETS, Settings, the Task loader (tomllib)
   parse.py             HTML stripping, prompt rendering, output-field splitting
   client.py            the claude -p call + rate-limit backoff
+  checkpoint.py        JSONL checkpoint records + the resume-safety meta stamp
+  report.py            cost/usage accounting + the --status report
   runner.py            CSV read -> render -> fan-out -> checkpoint -> output rebuild
   cli.py               argparse front end (--task + --col + --preset)
   tasks/               built-in tasks (each: <name>.toml + <name>.system.md)

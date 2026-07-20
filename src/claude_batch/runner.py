@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import csv
-import hashlib
 import json
 import os
 import signal
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextlib import nullcontext
 
+from .checkpoint import append_checkpoint, default_checkpoint, load_checkpoint, verify_or_stamp_meta
 from .client import USAGE_KEYS, LimitReached, log, run_with_retries, terminate_children
 from .config import PACK_EXTRA_TIMEOUT_PER_ROW_S, Settings, Task
 from .parse import (
@@ -29,207 +28,7 @@ from .parse import (
     strip_html,
     template_vars,
 )
-
-# Both the status report and the run summary quote reported API cost; on a
-# subscription plan the CLI reports $0 and tokens are the real spend.
-COST_NOTE = "$0 if drawn from a subscription"
-
-
-# --- Checkpoint -------------------------------------------------------------
-def default_checkpoint(output_path: str) -> str:
-    return output_path + ".checkpoint.jsonl"
-
-
-def load_checkpoint(path: str) -> dict[int, dict]:
-    done: dict[int, dict] = {}
-    if not os.path.exists(path):
-        return done
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-                done[int(rec["idx"])] = rec
-            except (json.JSONDecodeError, KeyError, ValueError):
-                continue
-    return done
-
-
-def append_checkpoint(path: str, rec: dict, lock: threading.Lock | None = None) -> None:
-    """Append one record; pass a lock when multiple threads share the file."""
-    with lock or nullcontext():
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-
-
-def load_meta(path: str) -> dict | None:
-    """First meta record in the checkpoint (stamped when a run starts), if any.
-    Meta records have no 'idx', so `load_checkpoint` skips them by design."""
-    if not os.path.exists(path):
-        return None
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(rec, dict) and rec.get("meta"):
-                return rec
-    return None
-
-
-def rows_fingerprint(data_rows: list[list[str]], n: int) -> str:
-    """sha256 over the first `n` data rows. Rows are keyed by position, so the
-    prefix is what must stay stable between runs; appending rows is fine."""
-    h = hashlib.sha256()
-    for row in data_rows[:n]:
-        h.update(json.dumps(row, ensure_ascii=False).encode("utf-8"))
-        h.update(b"\x00")
-    return h.hexdigest()
-
-
-def verify_or_stamp_meta(checkpoint_path: str, task: Task, model: str, data_rows: list[list[str]]) -> None:
-    """Guard the positional keying: refuse to resume a checkpoint against a
-    different task or a changed input prefix. First run stamps a meta record."""
-    meta = load_meta(checkpoint_path)
-    if meta is None:
-        rec = {
-            "meta": 1,
-            "task": task.name,
-            "model": model,
-            "input_rows": len(data_rows),
-            "rows_sha256": rows_fingerprint(data_rows, len(data_rows)),
-        }
-        append_checkpoint(checkpoint_path, rec)
-        return
-
-    if meta.get("task") and meta["task"] != task.name:
-        raise SystemExit(
-            f"Checkpoint {checkpoint_path} was created by task '{meta['task']}', not "
-            f"'{task.name}'. Use a different --output/--checkpoint, or delete it to start over."
-        )
-    n = meta.get("input_rows")
-    want = meta.get("rows_sha256")
-    if isinstance(n, int) and want:
-        if len(data_rows) < n:
-            raise SystemExit(
-                f"Input has {len(data_rows)} rows but checkpoint {checkpoint_path} was created "
-                f"against {n}. Rows are keyed by position; a shrunk input cannot be verified. "
-                f"Restore the original input, or delete the checkpoint to start over."
-            )
-        if rows_fingerprint(data_rows, n) != want:
-            raise SystemExit(
-                f"Input rows changed since checkpoint {checkpoint_path} was created (rows are "
-                f"keyed by position, so edits/reordering would mix results). Appending rows is "
-                f"fine; anything else needs a fresh --output/--checkpoint."
-            )
-    if meta.get("model") and meta["model"] != model:
-        log(
-            f"note: checkpoint was started with model={meta['model']}, resuming with "
-            f"model={model}; completed rows keep the old model's output."
-        )
-
-
-def print_status(
-    *,
-    output_path: str | None = None,
-    checkpoint_path: str | None = None,
-    input_path: str | None = None,
-    has_header: bool = False,
-    limit: int | None = None,
-) -> None:
-    """Read-only progress report from the checkpoint. Safe to run against a live
-    run in another terminal: the checkpoint is the durable source of truth."""
-    if checkpoint_path is None:
-        if output_path is None:
-            raise SystemExit("--status needs --output (or --checkpoint) to locate the checkpoint.")
-        checkpoint_path = default_checkpoint(output_path)
-    if not os.path.exists(checkpoint_path):
-        print(f"No checkpoint at {checkpoint_path} (run not started, or nothing done yet).")
-        return
-
-    done = load_checkpoint(checkpoint_path)
-    errors = sum(1 for r in done.values() if r.get("error"))
-    cost = sum_cost(done.values())
-    ok = len(done) - errors
-
-    total: int | None = None
-    if input_path and os.path.exists(input_path):
-        with open(input_path, newline="", encoding="utf-8") as f:
-            rows = list(csv.reader(f))
-        data_rows = rows[1:] if has_header else rows
-        total = len(data_rows) if limit is None else min(limit, len(data_rows))
-
-    print(f"Checkpoint: {checkpoint_path}")
-    meta = load_meta(checkpoint_path)
-    if meta:
-        print(f"Run:        task={meta.get('task', '?')}, model={meta.get('model', '?')}")
-    if total is not None:
-        remaining = max(0, total - len(done))
-        pct = (len(done) / total * 100) if total else 0.0
-        print(f"Progress:   {len(done)}/{total} rows ({pct:.0f}%), {remaining} remaining")
-    else:
-        print(f"Progress:   {len(done)} rows recorded (pass --input for a total)")
-    print(f"Results:    {ok} ok, {errors} errors")
-    print(f"Cost:       ${cost:.4f} (reported API cost; {COST_NOTE})")
-    print(f"Tokens:     {fmt_tokens(sum_usage(done.values()))}")
-
-
-def sum_cost(records) -> float:
-    return sum(float(r.get("cost") or 0.0) for r in records)
-
-
-def split_usage(usage: dict[str, int], n: int) -> list[dict[str, int]]:
-    """Split one call's token usage into n integer shares (remainder on the first),
-    so per-record shares always sum to the call's true totals."""
-    shares = [{k: v // n for k, v in usage.items()} for _ in range(n)]
-    for k, v in usage.items():
-        shares[0][k] += v % n
-    return shares
-
-
-def add_usage(a: dict[str, int], b: dict[str, int]) -> dict[str, int]:
-    """Element-wise sum of two (possibly partial) usage dicts."""
-    out = dict(a)
-    for k, v in b.items():
-        out[k] = int(out.get(k) or 0) + int(v or 0)
-    return out
-
-
-def sum_usage(records) -> dict[str, int]:
-    totals = dict.fromkeys(USAGE_KEYS, 0)
-    for rec in records:
-        u = rec.get("usage") or {}
-        for k in USAGE_KEYS:
-            totals[k] += int(u.get(k) or 0)
-    return totals
-
-
-def fmt_tokens(usage: dict[str, int]) -> str:
-    def g(key: str) -> int:
-        return int(usage.get(key) or 0)
-
-    return (
-        f"{g('input_tokens'):,} in, {g('output_tokens'):,} out "
-        f"(+{g('cache_creation_input_tokens'):,} cache write, "
-        f"{g('cache_read_input_tokens'):,} cache read)"
-    )
-
-
-def fmt_duration(seconds: float) -> str:
-    s = int(seconds)
-    h, rem = divmod(s, 3600)
-    m, s = divmod(rem, 60)
-    if h:
-        return f"{h}h{m:02d}m"
-    if m:
-        return f"{m}m{s:02d}s"
-    return f"{s}s"
+from .report import COST_NOTE, add_usage, fmt_duration, fmt_tokens, split_usage
 
 
 # --- CSV helpers ------------------------------------------------------------
