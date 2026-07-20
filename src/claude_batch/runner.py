@@ -170,6 +170,14 @@ def split_usage(usage: dict[str, int], n: int) -> list[dict[str, int]]:
     return shares
 
 
+def add_usage(a: dict[str, int], b: dict[str, int]) -> dict[str, int]:
+    """Element-wise sum of two (possibly partial) usage dicts."""
+    out = dict(a)
+    for k, v in b.items():
+        out[k] = int(out.get(k) or 0) + int(v or 0)
+    return out
+
+
 def sum_usage(records) -> dict[str, int]:
     totals = dict.fromkeys(USAGE_KEYS, 0)
     for rec in records:
@@ -383,10 +391,15 @@ def run_batch(
             eta = f" (ETA {fmt_duration(remaining * elapsed / n)})"
         log(f"  [{n}/{len(todo)}] {tag} row {rec['idx']}: {preview}{eta}")
 
-    def worker(chunk):
+    def worker(chunk, carry=None):
         """One claude call for a chunk of 1..pack rows. A lone row gets its plain
         prompt (identical to the unpacked path); a bigger chunk gets the packed
-        wrapper and the response is split back into per-row records."""
+        wrapper and the response is split back into per-row records. A row missing
+        from a packed response (marker dropped or duplicated) is retried right
+        away in halved packs, down to a single plain call, before any error is
+        recorded; `carry` accumulates the failed attempts' cost/usage shares per
+        row idx so the final record charges the row for the whole cascade."""
+        carry = carry or {}
         if stop_event.is_set():  # a limit/interrupt already stopped the run; skip untouched
             return
         indices = [idx for idx, _, _ in chunk]
@@ -418,19 +431,23 @@ def run_batch(
                 return
             msg = str(e)[:300]
             for idx in indices:
-                finish_row({"idx": idx, "fields": {}, "cost": 0.0, "error": msg})
+                c0, u0 = carry.get(idx, (0.0, {}))
+                finish_row({"idx": idx, "fields": {}, "cost": c0, "usage": u0, "error": msg})
             return
         per_row = {indices[0]: text} if len(chunk) == 1 else split_packed(text, indices)
         share = cost / len(chunk)
         usage_shares = split_usage(usage, len(chunk))
+        missing: list[int] = []
         for pos, idx in enumerate(indices):
+            c0, u0 = carry.get(idx, (0.0, {}))
+            row_cost = share + c0
+            row_usage = add_usage(usage_shares[pos], u0)
             raw = per_row.get(idx, "")
             if not raw.strip():
-                # The model dropped this row's marker; the error record makes a
-                # re-run retry just this row (alone or in a smaller pack).
-                err = "pack: row missing from packed response"
-                rec = {"idx": idx, "fields": {}, "cost": share, "usage": usage_shares[pos], "error": err}
-                finish_row(rec)
+                # The model dropped (or duplicated) this row's marker; carry this
+                # attempt's share into the retry below instead of erroring now.
+                carry[idx] = (row_cost, row_usage)
+                missing.append(idx)
                 continue
             fields = split_fields(raw, task.output_columns, task.sentinel)
             finish_row(
@@ -438,11 +455,29 @@ def run_batch(
                     "idx": idx,
                     "fields": fields,
                     "raw": raw,
-                    "cost": share,
-                    "usage": usage_shares[pos],
+                    "cost": row_cost,
+                    "usage": row_usage,
                     "error": "",
                 }
             )
+        if not missing:
+            return
+        if len(chunk) == 1 or stop_event.is_set():
+            # Can't shrink further, or the run is draining: record the miss so a
+            # future re-run retries these rows.
+            for idx in missing:
+                c0, u0 = carry[idx]
+                err = "pack: row missing from packed response"
+                finish_row({"idx": idx, "fields": {}, "cost": c0, "usage": u0, "error": err})
+            return
+        sub = max(1, len(chunk) // 2)
+        log(
+            f"  pack: {len(missing)} of {len(chunk)} row(s) missing from packed response; "
+            + ("retrying individually." if sub == 1 else f"retrying in packs of {sub}.")
+        )
+        retry = [w for w in chunk if w[0] in set(missing)]
+        for i in range(0, len(retry), sub):
+            worker(retry[i : i + sub], carry)
 
     interrupted = [False]  # first Ctrl-C: drain. second: hard kill.
 

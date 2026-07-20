@@ -78,17 +78,19 @@ def pack_prompts(items: list[tuple[int, str]]) -> str:
 def split_packed(text: str, indices: list[int]) -> dict[int, str]:
     """Split a packed response back into per-row chunks keyed by row index.
 
-    A row whose marker never appears is absent from the result (the caller
-    records it as an error so a re-run retries it). Any preamble before the
-    first marker, and chunks under markers not in `indices`, are dropped."""
+    A row whose marker never appears is absent from the result, and so is a row
+    whose marker appears more than once (a duplicated marker means the response
+    shape is untrustworthy for that row; keeping the last chunk would pick one
+    silently). The caller retries absent rows. Any preamble before the first
+    marker, and chunks under markers not in `indices`, are dropped."""
     want = set(indices)
-    parts: dict[int, str] = {}
+    parts: dict[int, list[str]] = {}
     cur: int | None = None
     buf: list[str] = []
 
     def flush() -> None:
         if cur is not None and cur in want:
-            parts[cur] = "\n".join(buf).strip()
+            parts.setdefault(cur, []).append("\n".join(buf).strip())
 
     for line in text.splitlines():
         m = _ROW_MARKER_RE.match(line)
@@ -99,7 +101,7 @@ def split_packed(text: str, indices: list[int]) -> dict[int, str]:
         else:
             buf.append(line)
     flush()
-    return parts
+    return {idx: chunks[0] for idx, chunks in parts.items() if len(chunks) == 1}
 
 
 def split_fields(text: str, columns: tuple[str, ...], sentinel: str | None) -> dict[str, str]:

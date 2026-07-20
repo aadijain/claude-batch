@@ -60,3 +60,10 @@ def test_split_packed_missing_row_absent():
 def test_split_packed_drops_preamble_and_unexpected_markers():
     text = "Sure, here you go:\n<<<ROW 2>>>\nx\n<<<ROW 9>>>\nnoise"
     assert split_packed(text, [2]) == {2: "x"}
+
+
+def test_split_packed_duplicate_marker_treated_as_missing():
+    # A duplicated marker means the response shape is untrustworthy for that row:
+    # drop it (so the caller retries) instead of silently keeping the last chunk.
+    text = "<<<ROW 0>>>\nfirst\n<<<ROW 0>>>\nsecond\n<<<ROW 1>>>\nok"
+    assert split_packed(text, [0, 1]) == {1: "ok"}

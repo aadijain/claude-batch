@@ -219,14 +219,75 @@ def test_run_batch_packed_rows_share_one_call(tmp_path, monkeypatch):
     assert done[0]["cost"] == 0.5 and done[1]["cost"] == 0.5
 
 
-def test_run_batch_packed_missing_row_becomes_error(tmp_path, monkeypatch):
+def test_run_batch_packed_missing_row_recovered_in_run(tmp_path, monkeypatch):
+    # A row dropped from the packed response is retried immediately (alone, since
+    # half of a 2-pack is 1) and its record carries both attempts' cost/usage.
+    calls = []
+
     def fake(prompt, *a, **k):
-        return "<<<ROW 0>>>\nout-a", 0.0, {}
+        calls.append(prompt)
+        if "<<<ROW" in prompt:
+            return "<<<ROW 0>>>\nout-a", 1.0, {"input_tokens": 4}
+        return "out-b", 0.25, {"input_tokens": 2}
+
+    out_rows, done = _run(tmp_path, monkeypatch, fake, rows=[["a"], ["b"]], settings=_pack_settings(2))
+    assert len(calls) == 2 and calls[1] == "b"
+    assert done[1]["fields"]["out"] == "out-b" and not done[1]["error"]
+    assert done[1]["cost"] == 0.5 + 0.25
+    assert done[1]["usage"]["input_tokens"] == 2 + 2
+    assert done[0]["cost"] == 0.5
+    assert [r[-1] for r in out_rows] == ["out-a", "out-b"]
+
+
+def test_run_batch_packed_recovery_failure_records_error(tmp_path, monkeypatch):
+    # The in-run retry itself fails: the row is recorded as an error (for a
+    # future re-run) and keeps its cost share of the failed packed call.
+    def fake(prompt, *a, **k):
+        if "<<<ROW" in prompt:
+            return "<<<ROW 0>>>\nout-a", 1.0, {}
+        raise RuntimeError("error: boom")
 
     out_rows, done = _run(tmp_path, monkeypatch, fake, rows=[["a"], ["b"]], settings=_pack_settings(2))
     assert done[0]["fields"]["out"] == "out-a" and not done[0]["error"]
-    assert done[1]["error"].startswith("pack:")
+    assert done[1]["error"] == "error: boom"
+    assert done[1]["cost"] == 0.5
     assert [r[-1] for r in out_rows] == ["out-a", ""]
+
+
+def test_run_batch_packed_recovery_halves_the_pack(tmp_path, monkeypatch):
+    # A 4-pack that loses 3 rows retries them in packs of 2 (then a lone row).
+    calls = []
+
+    def fake(prompt, *a, **k):
+        calls.append(prompt)
+        if "4 independent items" in prompt:
+            return "<<<ROW 0>>>\nA", 0.0, {}
+        if "2 independent items" in prompt:
+            return "<<<ROW 1>>>\nB\n<<<ROW 2>>>\nC", 0.0, {}
+        return "D", 0.0, {}
+
+    out_rows, done = _run(
+        tmp_path, monkeypatch, fake, rows=[["a"], ["b"], ["c"], ["d"]], settings=_pack_settings(4)
+    )
+    assert len(calls) == 3
+    assert not any(r["error"] for r in done.values())
+    assert [r[-1] for r in out_rows] == ["A", "B", "C", "D"]
+
+
+def test_run_batch_packed_duplicate_marker_recovered(tmp_path, monkeypatch):
+    # A duplicated marker counts as a miss (not last-write-wins) and is retried.
+    calls = []
+
+    def fake(prompt, *a, **k):
+        calls.append(prompt)
+        if "<<<ROW" in prompt:
+            return "<<<ROW 0>>>\nA\n<<<ROW 1>>>\nB1\n<<<ROW 1>>>\nB2", 0.0, {}
+        return "B", 0.0, {}
+
+    out_rows, done = _run(tmp_path, monkeypatch, fake, rows=[["a"], ["b"]], settings=_pack_settings(2))
+    assert len(calls) == 2
+    assert done[1]["fields"]["out"] == "B" and not done[1]["error"]
+    assert [r[-1] for r in out_rows] == ["A", "B"]
 
 
 def test_run_batch_packed_call_error_marks_all_rows(tmp_path, monkeypatch):
