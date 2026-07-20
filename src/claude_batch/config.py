@@ -93,8 +93,11 @@ class Task:
       is mapped to a CSV column at runtime (see runner). A template line whose
       placeholders all resolve empty is dropped (optional-context columns).
     - `output_columns`  : names of the columns parsed out of the model response.
+    - `format`          : "text" (default) parses the raw response, splitting on
+      the sentinel; "json" asks for a JSON object keyed by the output columns
+      (packing-aware: a packed call returns one array keyed by row index).
     - `sentinel`        : line that separates fields when there is >1 output
-      column (None for single-column raw output).
+      column (None for single-column raw output; text format only).
     - `system_prompt_file` : absolute path to a replacement system prompt, or None
       to use claude's default.
     """
@@ -103,6 +106,7 @@ class Task:
     description: str
     prompt_template: str
     output_columns: tuple[str, ...]
+    format: str = "text"
     sentinel: str | None = None
     system_prompt_file: str | None = None
 
@@ -142,11 +146,27 @@ def load_task(spec: str) -> Task:
     if not cols:
         raise SystemExit(f"Task '{spec}' must declare at least one output column.")
 
+    fmt = data.get("format", "text")
+    if fmt not in ("text", "json"):
+        raise SystemExit(f"Task '{spec}' has unknown format '{fmt}' (expected 'text' or 'json').")
+    if fmt == "json":
+        if data.get("sentinel"):
+            raise SystemExit(
+                f"Task '{spec}' sets both format='json' and a sentinel; json tasks use "
+                f"output_columns as JSON keys, so remove 'sentinel'."
+            )
+        if "row" in cols:
+            raise SystemExit(
+                f"Task '{spec}': output column 'row' is reserved in json format "
+                f"(it carries the packed row index)."
+            )
+
     return Task(
         name=data.get("name", os.path.splitext(os.path.basename(path))[0]),
         description=data.get("description", ""),
         prompt_template=data["prompt_template"],
         output_columns=cols,
+        format=fmt,
         sentinel=data.get("sentinel"),
         system_prompt_file=sys_prompt,
     )

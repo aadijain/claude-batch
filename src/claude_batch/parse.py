@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import json
 import re
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -127,3 +128,111 @@ def split_fields(text: str, columns: tuple[str, ...], sentinel: str | None) -> d
     chunks.append("\n".join(cur).strip())
     chunks = (chunks + [""] * n)[:n]
     return dict(zip(columns, chunks, strict=False))
+
+
+# --- JSON output mode --------------------------------------------------------
+# A task with `format = "json"` asks the model for a JSON object whose keys are
+# the task's output_columns (no sentinel). The output contract is engine-owned:
+# it is appended to the system prompt on every call, so the task prompt does not
+# have to restate the shape. Packed JSON calls ask for ONE array of objects keyed
+# by an integer "row" (the packed row index), replacing the echoed-marker protocol
+# entirely - there is no marker for the model to drop.
+
+PACK_ROW_KEY = "row"  # reserved key carrying the packed row index; not a column
+
+_JSON_START_RE = re.compile(r"[{\[]")
+
+
+def json_contract(columns: tuple[str, ...]) -> str:
+    """System-prompt addendum stating the single-row JSON output contract."""
+    keys = ", ".join(f'"{c}"' for c in columns)
+    return (
+        f"Respond with a single JSON object with exactly these keys: {keys}. "
+        "Every value must be a string. Output only the JSON object: no prose, "
+        "no code fences, nothing before or after it."
+    )
+
+
+def json_pack_contract(columns: tuple[str, ...]) -> str:
+    """System-prompt addendum for packed JSON calls: one array, rows keyed by index."""
+    keys = ", ".join(f'"{c}"' for c in columns)
+    return (
+        "The user message contains several independent items, each introduced by a "
+        "marker line of the form <<<ROW k>>>. Apply all instructions above to each "
+        "item separately. Respond with a single JSON array containing exactly one "
+        f'object per item, in the same order. Each object has an integer "{PACK_ROW_KEY}" '
+        f"key echoing the item's k, plus exactly these keys: {keys}. Every value "
+        f'other than "{PACK_ROW_KEY}" must be a string. Output only the JSON array: '
+        "no prose, no code fences, nothing before or after it."
+    )
+
+
+def pack_prompts_json(items: list[tuple[int, str]]) -> str:
+    """Packed prompt for a JSON task: marked input blocks, one JSON array back."""
+    header = (
+        f"You are given {len(items)} independent items in one request, each "
+        "introduced by a marker line <<<ROW k>>>. Handle each item separately, "
+        "exactly as if it were the only input.\n"
+        "Respond with a single JSON array: one object per item, in order, each "
+        f'carrying the item\'s k as an integer "{PACK_ROW_KEY}" key. Output nothing '
+        "outside the array."
+    )
+    blocks = [f"{row_marker(idx)}\n{prompt}" for idx, prompt in items]
+    return header + "\n\n" + "\n\n".join(blocks)
+
+
+def extract_json(text: str):
+    """Best-effort extraction of the first JSON value from a model response.
+
+    Handles clean JSON, JSON inside prose or ```code fences```, and trailing
+    chatter: every `{`/`[` is tried as a start with `raw_decode` (which ignores
+    what follows a complete value) until one parses. Returns None if nothing does."""
+    decoder = json.JSONDecoder()
+    for m in _JSON_START_RE.finditer(text):
+        try:
+            obj, _ = decoder.raw_decode(text, m.start())
+        except json.JSONDecodeError:
+            continue
+        return obj
+    return None
+
+
+def _to_cell(value) -> str:
+    """Coerce one JSON value to a CSV cell: strings pass through, null is empty,
+    containers stay JSON so nothing is silently lost."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def json_fields(obj: dict, columns: tuple[str, ...]) -> dict[str, str]:
+    """Map a parsed JSON object onto the task's output columns (missing keys empty)."""
+    return {c: _to_cell(obj.get(c)) for c in columns}
+
+
+def split_packed_json(text: str, indices: list[int]) -> dict[int, dict]:
+    """Split a packed JSON response into per-row objects keyed by row index.
+
+    Mirrors `split_packed`'s trust rules: a row whose object never appears is
+    absent from the result (the caller retries it), and so is a row claimed by
+    more than one object. Objects without a valid integer row key, or under
+    indices not in `indices`, are dropped."""
+    data = extract_json(text)
+    if isinstance(data, dict):
+        data = [data]  # a model answering a small pack with a lone object
+    if not isinstance(data, list):
+        return {}
+    want = set(indices)
+    seen: dict[int, list[dict]] = {}
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        idx = item.get(PACK_ROW_KEY)
+        if isinstance(idx, bool) or not isinstance(idx, int) or idx not in want:
+            continue
+        seen.setdefault(idx, []).append(item)
+    return {idx: objs[0] for idx, objs in seen.items() if len(objs) == 1}

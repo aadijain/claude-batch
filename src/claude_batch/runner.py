@@ -15,10 +15,16 @@ from .client import USAGE_KEYS, LimitReached, _print_lock, log, run_with_retries
 from .config import PACK_EXTRA_TIMEOUT_PER_ROW_S, Settings, Task
 from .parse import (
     PACK_SYSTEM_ADDENDUM,
+    extract_json,
+    json_contract,
+    json_fields,
+    json_pack_contract,
     pack_prompts,
+    pack_prompts_json,
     render_prompt,
     split_fields,
     split_packed,
+    split_packed_json,
     strip_html,
     template_vars,
 )
@@ -403,7 +409,15 @@ def run_batch(
         if stop_event.is_set():  # a limit/interrupt already stopped the run; skip untouched
             return
         indices = [idx for idx, _, _ in chunk]
-        prompt = chunk[0][1] if len(chunk) == 1 else pack_prompts([(i, p) for i, p, _ in chunk])
+        is_json = task.format == "json"
+        if len(chunk) == 1:
+            prompt = chunk[0][1]
+            # json tasks carry their engine-owned output contract on every call.
+            addendum = json_contract(task.output_columns) if is_json else None
+        else:
+            pairs = [(i, p) for i, p, _ in chunk]
+            prompt = pack_prompts_json(pairs) if is_json else pack_prompts(pairs)
+            addendum = json_pack_contract(task.output_columns) if is_json else PACK_SYSTEM_ADDENDUM
         # One call generates len(chunk) outputs serially; give it timeout headroom
         # to match, so the base stays sized for a single row.
         timeout_s = settings.call_timeout_s + (len(chunk) - 1) * PACK_EXTRA_TIMEOUT_PER_ROW_S
@@ -414,10 +428,10 @@ def run_batch(
                 settings.model,
                 timeout_s,
                 stop_on_limit=stop_on_limit,
-                # The system-level packed contract; without it, strict task system
+                # The system-level output contract; without it, strict task system
                 # prompts ("the first character of your response must be...")
-                # contradict the marker framing and cause marker misses.
-                append_system_prompt=PACK_SYSTEM_ADDENDUM if len(chunk) > 1 else None,
+                # contradict the packed/json framing and cause parse misses.
+                append_system_prompt=addendum,
             )
         except LimitReached:
             # Don't checkpoint: the rows were not attempted to completion, so a
@@ -434,7 +448,18 @@ def run_batch(
                 c0, u0 = carry.get(idx, (0.0, {}))
                 finish_row({"idx": idx, "fields": {}, "cost": c0, "usage": u0, "error": msg})
             return
-        per_row = {indices[0]: text} if len(chunk) == 1 else split_packed(text, indices)
+        per_row: dict[int, str | dict] = {}
+        if is_json:
+            if len(chunk) == 1:
+                obj = extract_json(text)
+                if isinstance(obj, dict):
+                    per_row[indices[0]] = obj
+            else:
+                per_row.update(split_packed_json(text, indices))
+        elif len(chunk) == 1:
+            per_row[indices[0]] = text
+        else:
+            per_row.update(split_packed(text, indices))
         share = cost / len(chunk)
         usage_shares = split_usage(usage, len(chunk))
         missing: list[int] = []
@@ -442,14 +467,20 @@ def run_batch(
             c0, u0 = carry.get(idx, (0.0, {}))
             row_cost = share + c0
             row_usage = add_usage(usage_shares[pos], u0)
-            raw = per_row.get(idx, "")
-            if not raw.strip():
-                # The model dropped (or duplicated) this row's marker; carry this
-                # attempt's share into the retry below instead of erroring now.
+            got = per_row.get(idx)
+            if got is None or (isinstance(got, str) and not got.strip()):
+                # The model dropped (or duplicated) this row's marker / row object,
+                # or a lone json call came back unparseable; carry this attempt's
+                # share into the retry below instead of erroring now.
                 carry[idx] = (row_cost, row_usage)
                 missing.append(idx)
                 continue
-            fields = split_fields(raw, task.output_columns, task.sentinel)
+            if isinstance(got, dict):
+                fields = json_fields(got, task.output_columns)
+                raw = json.dumps(got, ensure_ascii=False)
+            else:
+                raw = got
+                fields = split_fields(raw, task.output_columns, task.sentinel)
             finish_row(
                 {
                     "idx": idx,
@@ -467,7 +498,11 @@ def run_batch(
             # future re-run retries these rows.
             for idx in missing:
                 c0, u0 = carry[idx]
-                err = "pack: row missing from packed response"
+                err = (
+                    "json: no parseable JSON object in response"
+                    if is_json and len(chunk) == 1
+                    else "pack: row missing from packed response"
+                )
                 finish_row({"idx": idx, "fields": {}, "cost": c0, "usage": u0, "error": err})
             return
         sub = max(1, len(chunk) // 2)

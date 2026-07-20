@@ -53,3 +53,44 @@ def test_load_unknown_task_raises():
 
     with pytest.raises(SystemExit):
         load_task("does-not-exist")
+
+
+def _write_task(tmp_path, body):
+    path = tmp_path / "t.toml"
+    path.write_text(body, encoding="utf-8")
+    return str(path)
+
+
+_JSON_TASK = 'prompt_template = "{source}"\noutput_columns = ["translation", "notes"]\nformat = "json"\n'
+
+
+def test_load_json_task(tmp_path):
+    task = load_task(_write_task(tmp_path, _JSON_TASK))
+    assert task.format == "json" and task.sentinel is None
+
+
+def test_default_format_is_text():
+    assert load_task("jp-translate").format == "text"
+
+
+def test_load_task_unknown_format_raises(tmp_path):
+    import pytest
+
+    body = 'prompt_template = "{source}"\noutput_columns = ["out"]\nformat = "yaml"\n'
+    with pytest.raises(SystemExit):
+        load_task(_write_task(tmp_path, body))
+
+
+def test_load_json_task_with_sentinel_raises(tmp_path):
+    import pytest
+
+    with pytest.raises(SystemExit):
+        load_task(_write_task(tmp_path, _JSON_TASK + 'sentinel = "---X---"\n'))
+
+
+def test_load_json_task_row_column_reserved(tmp_path):
+    import pytest
+
+    body = 'prompt_template = "{source}"\noutput_columns = ["row"]\nformat = "json"\n'
+    with pytest.raises(SystemExit):
+        load_task(_write_task(tmp_path, body))

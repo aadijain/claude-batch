@@ -361,6 +361,85 @@ def test_run_batch_pack_lone_trailing_row_is_plain(tmp_path, monkeypatch):
     assert [r[-1] for r in out_rows] == ["A", "B", "C"]
 
 
+def _json_task(cols=("translation", "notes")):
+    return Task(name="t", description="", prompt_template="{source}", output_columns=cols, format="json")
+
+
+def test_run_batch_json_single_call(tmp_path, monkeypatch):
+    # Lone calls parse one JSON object (even fenced/noisy) into the columns and
+    # carry the engine-owned json contract as the system addendum.
+    appended = []
+
+    def fake(prompt, *a, **k):
+        appended.append(k.get("append_system_prompt"))
+        return 'Here:\n```json\n{"translation": "cat", "notes": "n"}\n```', 0.0, {}
+
+    out_rows, done = _run(tmp_path, monkeypatch, fake, rows=[["a"]], task=_json_task())
+    assert done[0]["fields"] == {"translation": "cat", "notes": "n"} and not done[0]["error"]
+    assert [r[-2:] for r in out_rows] == [["cat", "n"]]
+    from claude_batch.parse import json_contract
+
+    assert appended == [json_contract(("translation", "notes"))]
+
+
+def test_run_batch_json_unparseable_records_error(tmp_path, monkeypatch):
+    def fake(prompt, *a, **k):
+        return "no json at all", 0.0, {}
+
+    _, done = _run(tmp_path, monkeypatch, fake, rows=[["a"]], task=_json_task())
+    assert done[0]["error"] == "json: no parseable JSON object in response"
+
+
+def test_run_batch_json_packed_rows_share_one_call(tmp_path, monkeypatch):
+    # A packed json call sends marked inputs, gets ONE array keyed by row index,
+    # and carries the packed json contract instead of the marker addendum.
+    calls, appended = [], []
+
+    def fake(prompt, *a, **k):
+        calls.append(prompt)
+        appended.append(k.get("append_system_prompt"))
+        return '[{"row": 0, "translation": "A"}, {"row": 1, "translation": "B"}]', 1.0, {}
+
+    out_rows, done = _run(
+        tmp_path,
+        monkeypatch,
+        fake,
+        rows=[["a"], ["b"]],
+        task=_json_task(("translation",)),
+        settings=_pack_settings(2),
+    )
+    assert len(calls) == 1 and "<<<ROW 0>>>\na" in calls[0] and "JSON array" in calls[0]
+    from claude_batch.parse import json_pack_contract
+
+    assert appended == [json_pack_contract(("translation",))]
+    assert [r[-1] for r in out_rows] == ["A", "B"]
+    assert done[0]["cost"] == 0.5 and done[1]["cost"] == 0.5
+
+
+def test_run_batch_json_packed_missing_row_recovered_in_run(tmp_path, monkeypatch):
+    # A row absent from the packed array is retried alone, like a marker miss.
+    calls = []
+
+    def fake(prompt, *a, **k):
+        calls.append(prompt)
+        if "<<<ROW" in prompt:
+            return '[{"row": 0, "translation": "A"}]', 1.0, {}
+        return '{"translation": "B"}', 0.25, {}
+
+    out_rows, done = _run(
+        tmp_path,
+        monkeypatch,
+        fake,
+        rows=[["a"], ["b"]],
+        task=_json_task(("translation",)),
+        settings=_pack_settings(2),
+    )
+    assert len(calls) == 2 and calls[1] == "b"
+    assert done[1]["fields"]["translation"] == "B" and not done[1]["error"]
+    assert done[1]["cost"] == 0.5 + 0.25
+    assert [r[-1] for r in out_rows] == ["A", "B"]
+
+
 def test_run_batch_stops_at_max_cost(tmp_path, monkeypatch, capsys):
     called = []
 

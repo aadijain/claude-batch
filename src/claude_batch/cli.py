@@ -116,7 +116,11 @@ def main(argv: list[str] | None = None) -> None:
         print(f"name:               {task.name}")
         print(f"description:        {task.description or '(none)'}")
         print(f"output_columns:     {', '.join(task.output_columns)}")
-        print(f"sentinel:           {task.sentinel or '(none: single raw column)'}")
+        print(f"format:             {task.format}")
+        if task.format == "json":
+            print("sentinel:           (n/a: output columns are JSON keys)")
+        else:
+            print(f"sentinel:           {task.sentinel or '(none: single raw column)'}")
         print(f"system_prompt_file: {task.system_prompt_file or '(claude default)'}")
         print("\nprompt_template:")
         print(task.prompt_template.strip())

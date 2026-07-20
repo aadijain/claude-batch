@@ -87,6 +87,14 @@ To add a task, drop a `.toml` (plus an optional `.system.md`) into `tasks/`, or 
 output declare N `output_columns` and a `sentinel`, and have the system prompt separate
 the fields with that sentinel.
 
+Alternatively declare `format = "json"` (and no `sentinel`): the model is asked for a
+single JSON object whose keys are the `output_columns`, and the engine appends that
+contract to the system prompt on every call, so the task prompt does not have to
+restate it. Responses are extracted leniently (JSON inside prose or code fences still
+parses); an unparseable response is checkpointed as an error and retried on the next
+run. Missing keys leave their columns empty; non-string values are kept (numbers as
+text, nested objects as JSON). The column name `row` is reserved (see packing below).
+
 Built-in tasks:
 
 | Task | Output columns | Notes |
@@ -124,8 +132,12 @@ Edit `src/claude_batch/config.py` to add presets or change the retry policy.
   echoes back; the task's own sentinel still splits fields within a row, and packed
   calls append a system-prompt addendum (`--append-system-prompt`) restating the
   marker contract so strict task prompts don't fight it. A row whose marker is
-  missing from the response is checkpointed as an error and retried on the next
-  run. The per-call timeout automatically gains headroom per packed row
+  missing from the response is retried in-run in halved packs (down to a plain
+  single call) before being checkpointed as an error for the next run. For
+  `format = "json"` tasks the response side drops markers entirely: the call
+  returns ONE JSON array of objects keyed by an integer `row` index, so there is
+  no per-row marker for the model to lose. The per-call timeout automatically
+  gains headroom per packed row
   (`PACK_EXTRA_TIMEOUT_PER_ROW_S` in `config.py`, since one call answers N rows
   serially). Start with `--pack 10 --limit 20 --dry-run` to preview the packed calls.
 - `--limit N` - process only the first N rows (trial runs).
@@ -139,7 +151,7 @@ Edit `src/claude_batch/config.py` to add presets or change the retry policy.
 - `--keep-html` - keep HTML tags in input cells (default: strip `<b>`, decode `&nbsp;`).
 - `--checkpoint` - JSONL progress file (defaults to `<output>.checkpoint.jsonl`).
 - `--list-tasks` - print built-in tasks and exit.
-- `--show-task TASK` - print a task's template, output columns, and sentinel, then exit.
+- `--show-task TASK` - print a task's template, output columns, format, and sentinel, then exit.
 - `--status` - print checkpoint progress (done / remaining / errors / cost / tokens) for
   `--output` (or `--checkpoint`) and exit, without running. Read-only, so it is safe
   to point at a run in progress in another terminal. Pass `--input` for a row total.
