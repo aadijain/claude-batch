@@ -12,7 +12,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 
-from .client import USAGE_KEYS, LimitReached, _print_lock, log, run_with_retries, terminate_children
+from .client import USAGE_KEYS, LimitReached, log, run_with_retries, terminate_children
 from .config import PACK_EXTRA_TIMEOUT_PER_ROW_S, Settings, Task
 from .parse import (
     PACK_SYSTEM_ADDENDUM,
@@ -278,6 +278,20 @@ def resolve_col_map(
     return resolved
 
 
+class RunStats:
+    """This run's live accounting, shared by the worker threads and guarded by
+    its own lock (checkpoint writes and stderr printing have their own locks)."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.total_cost = 0.0
+        self.usage = dict.fromkeys(USAGE_KEYS, 0)
+        self.completed = 0
+        self.sentinel_misses = 0  # rows whose response lacked the sentinel (trailing cols empty)
+        self.stop_reason = ""  # "limit" or "cost" when stop_event was set by one of those
+        self.interrupted = False  # first Ctrl-C: drain. second: hard kill.
+
+
 def run_batch(
     *,
     input_path: str,
@@ -368,12 +382,8 @@ def run_batch(
     )
 
     ckpt_lock = threading.Lock()
-    total_cost = [0.0]
-    run_usage = dict.fromkeys(USAGE_KEYS, 0)  # this run's token totals (guarded by _print_lock)
-    completed = [0]
+    stats = RunStats()
     start_t = time.monotonic()
-    sentinel_misses = [0]  # rows whose response lacked the sentinel (trailing cols empty)
-    stop_reason = [""]  # "limit" or "cost" when stop_event was set by one of those
     # stop_event: drain gracefully (finish in-flight rows, stop submitting new).
     # Set by a rate/usage limit under --stop-on-limit, or by the first Ctrl-C.
     stop_event = threading.Event()
@@ -391,21 +401,21 @@ def run_batch(
         )
         append_checkpoint(checkpoint_path, rec, ckpt_lock)
         hit_budget = False
-        with _print_lock:
-            total_cost[0] += rec["cost"]
+        with stats.lock:
+            stats.total_cost += rec["cost"]
             for k in USAGE_KEYS:
-                run_usage[k] += int((rec.get("usage") or {}).get(k) or 0)
-            completed[0] += 1
-            n = completed[0]
+                stats.usage[k] += int((rec.get("usage") or {}).get(k) or 0)
+            stats.completed += 1
+            n = stats.completed
             if missed_sentinel:
-                sentinel_misses[0] += 1
-            if max_cost is not None and total_cost[0] >= max_cost and not stop_event.is_set():
-                stop_reason[0] = "cost"
+                stats.sentinel_misses += 1
+            if max_cost is not None and stats.total_cost >= max_cost and not stop_event.is_set():
+                stats.stop_reason = "cost"
                 stop_event.set()
                 hit_budget = True
         if hit_budget:
             log(
-                f"  --max-cost ${max_cost:.4f} reached (${total_cost[0]:.4f} spent); "
+                f"  --max-cost ${max_cost:.4f} reached (${stats.total_cost:.4f} spent); "
                 f"finishing in-flight rows, then stopping."
             )
         tag = "ERR " if rec["error"] else "ok  "
@@ -456,7 +466,8 @@ def run_batch(
         except LimitReached:
             # Don't checkpoint: the rows were not attempted to completion, so a
             # re-run retries them. Signal the rest of the pool to stop.
-            stop_reason[0] = stop_reason[0] or "limit"
+            with stats.lock:
+                stats.stop_reason = stats.stop_reason or "limit"
             stop_event.set()
             return
         except Exception as e:  # noqa: BLE001 - record and continue
@@ -534,15 +545,13 @@ def run_batch(
         for i in range(0, len(retry), sub):
             worker(retry[i : i + sub], carry)
 
-    interrupted = [False]  # first Ctrl-C: drain. second: hard kill.
-
     def handle_interrupt(signum, frame):
         if stop_event.is_set():
             hard_kill.set()
             log("\nSecond interrupt: killing in-flight claude processes now.")
             terminate_children()
         else:
-            interrupted[0] = True
+            stats.interrupted = True
             stop_event.set()
             log(
                 "\nInterrupt: finishing in-flight rows, then stopping "
@@ -584,9 +593,9 @@ def run_batch(
     os.replace(tmp_output, output_path)
 
     stopped = stop_event.is_set()
-    if interrupted[0]:
+    if stats.interrupted:
         headline = "Interrupted." if not hard_kill.is_set() else "Killed."
-    elif stopped and stop_reason[0] == "cost":
+    elif stopped and stats.stop_reason == "cost":
         headline = "Stopped at the --max-cost budget."
     elif stopped:
         headline = "Stopped on rate/usage limit."
@@ -595,12 +604,12 @@ def run_batch(
     log(
         f"\n{headline} Wrote {output_path}. "
         f"Completed {len(done) - errors}/{len(work)} rows, {errors} errors. "
-        f"Reported API cost: ${total_cost[0]:.4f} (this run; {COST_NOTE}). "
-        f"Tokens this run: {fmt_tokens(run_usage)}."
+        f"Reported API cost: ${stats.total_cost:.4f} (this run; {COST_NOTE}). "
+        f"Tokens this run: {fmt_tokens(stats.usage)}."
     )
-    if sentinel_misses[0]:
+    if stats.sentinel_misses:
         log(
-            f"note: {sentinel_misses[0]} row(s) came back without the '{task.sentinel}' sentinel, "
+            f"note: {stats.sentinel_misses} row(s) came back without the '{task.sentinel}' sentinel, "
             f"so trailing column(s) were left empty. If this is frequent, tighten the prompt template."
         )
     if stopped:
