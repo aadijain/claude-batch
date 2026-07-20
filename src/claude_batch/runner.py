@@ -297,13 +297,12 @@ def run_batch(
         val = row[idx].strip() if idx < len(row) else ""
         return val if keep_html else strip_html(val)
 
+    # data_rows[:None] is the whole list, so no limit means every row.
     work = []
-    for i, row in enumerate(data_rows):
+    for i, row in enumerate(data_rows[:limit]):
         values = {var: cell(row, idx) for var, idx in var_idx.items()}
         has_input = primary is None or (primary < len(row) and row[primary].strip())
         work.append((i, render_prompt(task.prompt_template, values), bool(has_input)))
-    if limit is not None:
-        work = work[:limit]
 
     if dry_run:
         # Read-only preview: print each rendered prompt and what would happen.
@@ -558,8 +557,7 @@ def run_batch(
         w = csv.writer(f)
         if header is not None:
             w.writerow(header + list(cols))
-        scoped = data_rows if limit is None else data_rows[:limit]
-        for i, row in enumerate(scoped):
+        for i, row in enumerate(data_rows[:limit]):
             fields = done.get(i, {}).get("fields", {})
             w.writerow(row + [fields.get(c, "") for c in cols])
     os.replace(tmp_output, output_path)
