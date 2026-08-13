@@ -1,9 +1,8 @@
-"""Command-line entry point. Resolves a task + model preset + flags, runs the batch."""
+"""Command-line entry point. Three subcommands: run, tasks, status."""
 
 from __future__ import annotations
 
 import argparse
-import sys
 
 from .config import PRESETS, builtin_tasks, load_task, resolve_settings
 from .report import print_status
@@ -24,6 +23,17 @@ def _parse_col(pairs: list[str]) -> dict[str, str]:
     return out
 
 
+def _positive_int(v: str) -> int:
+    """argparse type for a flag that must be >= 1 (exits 2 with a usage error)."""
+    try:
+        n = int(v)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected an integer, got '{v}'") from None
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1, got {n}")
+    return n
+
+
 def build_parser() -> argparse.ArgumentParser:
     from . import __version__
 
@@ -32,120 +42,127 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run a task over the rows of a CSV via claude -p (headless Claude Code).",
     )
     ap.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    ap.add_argument("--input", help="input CSV path")
-    ap.add_argument("--output", help="output CSV path")
-    ap.add_argument("--task", default=None, help="built-in task name or path to a task .toml")
-    ap.add_argument(
+    sub = ap.add_subparsers(dest="cmd", required=True, metavar="COMMAND")
+
+    # --- run ----------------------------------------------------------------
+    run = sub.add_parser("run", help="run a task over an input CSV")
+    run.add_argument("input", metavar="INPUT", help="input CSV path")
+    run.add_argument("output", metavar="OUTPUT", help="output CSV path")
+    run.add_argument("--task", required=True, help="built-in task name or path to a task .toml")
+    run.add_argument(
         "--col",
         action="append",
         default=[],
         metavar="VAR=COL",
         help="map a task template variable to a CSV column (0-based index or header name); repeatable",
     )
-    ap.add_argument("--has-header", action="store_true", help="treat the first row as a header")
+    run.add_argument("--has-header", action="store_true", help="treat the first row as a header")
 
-    ap.add_argument(
+    run.add_argument(
         "--preset",
         choices=sorted(PRESETS),
         default=None,
         help=f"model tier (default: fast). Available: {', '.join(sorted(PRESETS))}",
     )
-    ap.add_argument("--model", default=None, help="override the preset's claude-code model alias")
-    ap.add_argument(
+    run.add_argument("--model", default=None, help="override the preset's claude-code model alias")
+    run.add_argument(
         "--concurrency", type=int, default=None, help="override parallel claude -p calls (1-2 on Pro)"
     )
-    ap.add_argument(
+    run.add_argument(
         "--pack",
-        type=int,
+        type=_positive_int,
         default=None,
         metavar="N",
         help="pack N rows into each claude call to amortize the per-call prompt overhead (default 1)",
     )
 
-    ap.add_argument("--limit", type=int, default=None, help="process at most N rows (trial runs)")
-    ap.add_argument(
+    run.add_argument("--limit", type=_positive_int, default=None, help="process at most N rows (trial runs)")
+    run.add_argument(
         "--dry-run",
         action="store_true",
         help="print the rendered prompt per row and exit; nothing is called or written",
     )
-    ap.add_argument(
+    run.add_argument(
         "--stop-on-limit",
         action="store_true",
         help="exit cleanly when a rate/usage limit hits (re-run later to resume) instead of backing off",
     )
-    ap.add_argument(
+    run.add_argument(
         "--max-cost",
         type=float,
         default=None,
         metavar="USD",
         help="stop submitting new rows once this run's reported API cost reaches USD",
     )
-    ap.add_argument("--keep-html", action="store_true", help="keep HTML tags in input cells (default: strip)")
-    ap.add_argument(
+    run.add_argument(
+        "--keep-html", action="store_true", help="keep HTML tags in input cells (default: strip)"
+    )
+    run.add_argument(
         "--checkpoint", default=None, help="JSONL checkpoint path (default: <output>.checkpoint.jsonl)"
     )
-    ap.add_argument("--list-tasks", action="store_true", help="list built-in tasks and exit")
-    ap.add_argument(
-        "--show-task",
+
+    # --- tasks --------------------------------------------------------------
+    tasks = sub.add_parser("tasks", help="list built-in tasks, or show one in full")
+    tasks.add_argument(
+        "name",
         metavar="TASK",
+        nargs="?",
         default=None,
-        help="print a task's template, columns, and sentinel, then exit",
+        help="a task name or path: print its template, columns, and sentinel (omit to list all)",
     )
-    ap.add_argument(
-        "--status",
-        action="store_true",
-        help="print checkpoint progress for --output (or --checkpoint) and exit; no run",
+
+    # --- status -------------------------------------------------------------
+    status = sub.add_parser("status", help="print checkpoint progress for a run; no API calls")
+    status.add_argument(
+        "output",
+        metavar="OUTPUT",
+        nargs="?",
+        default=None,
+        help="the run's output CSV (its checkpoint is derived from it)",
     )
+    status.add_argument("--checkpoint", default=None, help="checkpoint path, instead of OUTPUT")
+    status.add_argument("--input", default=None, help="the run's input CSV, for a row total")
+    status.add_argument("--has-header", action="store_true", help="the input CSV has a header row")
+    status.add_argument("--limit", type=int, default=None, help="the run's --limit, for a row total")
+
     return ap
 
 
-def main(argv: list[str] | None = None) -> None:
-    args = build_parser().parse_args(argv)
-
-    if args.list_tasks:
+def cmd_tasks(args: argparse.Namespace) -> None:
+    if args.name is None:
         tasks = builtin_tasks()
         if not tasks:
             print("No built-in tasks found.")
             return
         for name in tasks:
-            task = load_task(name)
-            print(f"{name:16} {task.description}")
+            print(f"{name:16} {load_task(name).description}")
         return
 
-    if args.show_task:
-        task = load_task(args.show_task)
-        print(f"name:               {task.name}")
-        print(f"description:        {task.description or '(none)'}")
-        print(f"output_columns:     {', '.join(task.output_columns)}")
-        print(f"format:             {task.format}")
-        if task.format == "json":
-            print("sentinel:           (n/a: output columns are JSON keys)")
-        else:
-            print(f"sentinel:           {task.sentinel or '(none: single raw column)'}")
-        print(f"system_prompt_file: {task.system_prompt_file or '(claude default)'}")
-        print("\nprompt_template:")
-        print(task.prompt_template.strip())
-        return
+    task = load_task(args.name)
+    print(f"name:               {task.name}")
+    print(f"description:        {task.description or '(none)'}")
+    print(f"output_columns:     {', '.join(task.output_columns)}")
+    print(f"format:             {task.format}")
+    if task.format == "json":
+        print("sentinel:           (n/a: output columns are JSON keys)")
+    else:
+        print(f"sentinel:           {task.sentinel or '(none: single raw column)'}")
+    print(f"system_prompt_file: {task.system_prompt_file or '(claude default)'}")
+    print("\nprompt_template:")
+    print(task.prompt_template.strip())
 
-    if args.status:
-        print_status(
-            output_path=args.output,
-            checkpoint_path=args.checkpoint,
-            input_path=args.input,
-            has_header=args.has_header,
-            limit=args.limit,
-        )
-        return
 
-    missing = [f"--{k}" for k in ("input", "output", "task") if getattr(args, k) is None]
-    if missing:
-        print(f"Missing required arguments: {', '.join(missing)}", file=sys.stderr)
-        raise SystemExit(2)
+def cmd_status(args: argparse.Namespace) -> None:
+    print_status(
+        output_path=args.output,
+        checkpoint_path=args.checkpoint,
+        input_path=args.input,
+        has_header=args.has_header,
+        limit=args.limit,
+    )
 
-    if args.pack is not None and args.pack < 1:
-        print("--pack must be >= 1.", file=sys.stderr)
-        raise SystemExit(2)
 
+def cmd_run(args: argparse.Namespace) -> None:
     task = load_task(args.task)
     settings = resolve_settings(args.preset, model=args.model, concurrency=args.concurrency, pack=args.pack)
     run_batch(
@@ -162,6 +179,11 @@ def main(argv: list[str] | None = None) -> None:
         dry_run=args.dry_run,
         max_cost=args.max_cost,
     )
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
+    {"run": cmd_run, "tasks": cmd_tasks, "status": cmd_status}[args.cmd](args)
 
 
 if __name__ == "__main__":

@@ -3,8 +3,8 @@ import pytest
 from claude_batch.cli import _parse_col, main
 
 
-def test_show_task_prints_definition(capsys):
-    main(["--show-task", "jp-translate"])
+def test_tasks_with_name_prints_definition(capsys):
+    main(["tasks", "jp-translate"])
     out = capsys.readouterr().out
     assert "name:               jp-translate" in out
     assert "translation, notes" in out
@@ -12,14 +12,27 @@ def test_show_task_prints_definition(capsys):
     assert "Translate this line:" in out
 
 
-def test_list_tasks(capsys):
-    main(["--list-tasks"])
+def test_tasks_lists_builtins(capsys):
+    main(["tasks"])
     assert "jp-translate" in capsys.readouterr().out
 
 
-def test_missing_required_args_exits():
-    with pytest.raises(SystemExit):
+def test_no_subcommand_exits():
+    with pytest.raises(SystemExit) as exc:
         main([])
+    assert exc.value.code == 2
+
+
+def test_run_without_task_exits():
+    with pytest.raises(SystemExit) as exc:
+        main(["run", "x.csv", "y.csv"])
+    assert exc.value.code == 2
+
+
+def test_run_without_output_exits():
+    with pytest.raises(SystemExit) as exc:
+        main(["run", "x.csv", "--task", "jp-translate"])
+    assert exc.value.code == 2
 
 
 def test_version_flag(capsys):
@@ -32,8 +45,14 @@ def test_version_flag(capsys):
 
 def test_pack_below_one_exits():
     with pytest.raises(SystemExit) as exc:
-        main(["--input", "x.csv", "--output", "y.csv", "--task", "jp-translate", "--pack", "0"])
+        main(["run", "x.csv", "y.csv", "--task", "jp-translate", "--pack", "0"])
     assert exc.value.code == 2
+
+
+def test_status_without_target_exits():
+    with pytest.raises(SystemExit) as exc:
+        main(["status"])
+    assert exc.value.code != 0
 
 
 def test_parse_col():

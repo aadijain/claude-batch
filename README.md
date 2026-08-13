@@ -17,9 +17,9 @@ src/claude_batch/      installable package
   parse.py             HTML stripping, prompt rendering, output-field splitting
   client.py            the claude -p call + rate-limit backoff
   checkpoint.py        JSONL checkpoint records + the resume-safety meta stamp
-  report.py            cost/usage accounting + the --status report
+  report.py            cost/usage accounting + the status report
   runner.py            CSV read -> render -> fan-out -> checkpoint -> output rebuild
-  cli.py               argparse front end (--task + --col + --preset)
+  cli.py               argparse front end (run / tasks / status subcommands)
   tasks/               built-in tasks (each: <name>.toml + <name>.system.md)
 data/
   example.csv          tiny JP input (col0 sentence with markup, col1 optional EN)
@@ -39,22 +39,21 @@ Then either `claude-batch ...` or `python -m claude_batch ...`. Requires Python 
 List the built-in tasks:
 
 ```bash
-claude-batch --list-tasks
+claude-batch tasks
 ```
 
 Translate Japanese with optional English context (no header, columns by index):
 
 ```bash
-claude-batch --task jp-translate \
-  --input data/example.csv --output out/translated.csv \
-  --col source=0 --col context=1 --preset best
+claude-batch run data/example.csv out/translated.csv \
+  --task jp-translate --col source=0 --col context=1 --preset best
 ```
 
 Backgrounded (survives terminal close), logging to a file:
 
 ```bash
-nohup claude-batch --task jp-translate --input data/example.csv \
-  --output out/translated.csv --col source=0 --col context=1 \
+nohup claude-batch run data/example.csv out/translated.csv \
+  --task jp-translate --col source=0 --col context=1 \
   > run.log 2>&1 &
 ```
 
@@ -116,10 +115,21 @@ A preset picks **which model** (orthogonal to the task). Flags override it.
 
 Edit `src/claude_batch/config.py` to add presets or change the retry policy.
 
-## Flags
+## Commands
 
-- `--task` - built-in task name (see `--list-tasks`) or a path to a task `.toml`.
-- `--input` / `--output` - input CSV / final output CSV.
+```
+claude-batch run INPUT OUTPUT --task TASK [flags]   # run a task over a CSV
+claude-batch tasks [TASK]                           # list built-in tasks, or show one
+claude-batch status [OUTPUT] [--checkpoint P]       # progress for a run; no API calls
+```
+
+`claude-batch <command> --help` prints that command's flags. `--version` prints the
+installed version.
+
+### `run` flags
+
+- `INPUT` / `OUTPUT` (positional) - input CSV / final output CSV.
+- `--task` - built-in task name (see `claude-batch tasks`) or a path to a task `.toml`.
 - `--col VAR=COL` - map a task template variable to a CSV column (0-based index, or
   header name with `--has-header`). Repeatable. A variable also falls back to a
   same-named header if `--col` is omitted. A task with a single template variable run
@@ -152,12 +162,16 @@ Edit `src/claude_batch/config.py` to add presets or change the retry policy.
   reaches the budget (in-flight rows finish and checkpoint; re-run to resume).
 - `--keep-html` - keep HTML tags in input cells (default: strip `<b>`, decode `&nbsp;`).
 - `--checkpoint` - JSONL progress file (defaults to `<output>.checkpoint.jsonl`).
-- `--list-tasks` - print built-in tasks and exit.
-- `--show-task TASK` - print a task's template, output columns, format, and sentinel, then exit.
-- `--status` - print checkpoint progress (done / remaining / errors / cost / tokens) for
-  `--output` (or `--checkpoint`) and exit, without running. Read-only, so it is safe
-  to point at a run in progress in another terminal. Pass `--input` for a row total.
-- `--version` - print the installed version and exit.
+
+### `tasks` / `status`
+
+- `claude-batch tasks` lists the built-in tasks; `claude-batch tasks TASK` prints one
+  task's template, output columns, format, and sentinel. `TASK` may be a path.
+- `claude-batch status OUTPUT` prints checkpoint progress (done / remaining / errors /
+  cost / tokens) without running anything. Point it at the run's `OUTPUT` CSV, or pass
+  `--checkpoint` directly. Read-only, so it is safe against a run in progress in
+  another terminal. Pass `--input` (plus `--has-header` / `--limit` if the run used
+  them) for a row total.
 
 Lean-for-Pro internals (baked in): `--system-prompt-file` replaces the agent harness
 with just the task prompt, `--max-turns 1`, all tools disabled, `--output-format json`.
@@ -187,7 +201,7 @@ with just the task prompt, `--max-turns 1`, all tools disabled, `--output-format
   parsed, so any interrupted in-flight row is redone on resume either way.
 - **Resume:** re-run the **exact same command**. It loads the checkpoint, skips done
   rows, retries rows that previously errored, and continues. No special flag.
-- **Check progress:** `claude-batch --status --output out/x.csv [--input data/in.csv]`
+- **Check progress:** `claude-batch status out/x.csv [--input data/in.csv]`
   prints done / remaining / errors / cost without running anything.
 
 ## Rate-limit behavior
@@ -207,7 +221,7 @@ command later (once your window has reset) to resume from where it stopped.
   **position in the input file**; reshuffling desyncs the resume mapping. The meta
   stamp catches this: a resume against a different task, or an input whose existing
   rows changed, is refused (appending new rows is fine).
-- Use a distinct `--output` (and thus default checkpoint) per task/model so one run's
+- Use a distinct `OUTPUT` (and thus default checkpoint) per task/model so one run's
   checkpoint doesn't short-circuit another.
 
 ## Develop
@@ -229,7 +243,7 @@ itself is faked at the subprocess boundary and exercised for real by actual runs
 
 On Pro, `claude -p` draws subscription quota: **$0 cash but rate-limited**, so the
 number that matters is tokens, not dollars: per-row `usage` is checkpointed, and the
-run summary and `--status` print token totals (in / out / cache write / cache read).
+run summary and `status` print token totals (in / out / cache write / cache read).
 Most of each call is fixed harness overhead, so `--pack` is the main lever for
 stretching the usage window (see Flags). The metered alternative is the Batches API (50% batch
 discount, no throttle) - needs API credits, separate from Pro.

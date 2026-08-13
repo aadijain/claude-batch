@@ -77,7 +77,7 @@ def print_status(
     run in another terminal: the checkpoint is the durable source of truth."""
     if checkpoint_path is None:
         if output_path is None:
-            raise SystemExit("--status needs --output (or --checkpoint) to locate the checkpoint.")
+            raise SystemExit("status needs an OUTPUT path (or --checkpoint) to locate the checkpoint.")
         checkpoint_path = default_checkpoint(output_path)
     if not os.path.exists(checkpoint_path):
         print(f"No checkpoint at {checkpoint_path} (run not started, or nothing done yet).")
