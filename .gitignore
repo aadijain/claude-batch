@@ -11,13 +11,4 @@ venv/
 out/
 run.log
 *.checkpoint.jsonl
-mined_translated*.csv
-
-# Personal input data - never commit. Tracked example input is data/example.csv.
-data/mined_sentences.csv
-
-# Claude / editor
-CLAUDE.md
-.claude/
-.idea/
-.vscode/
+*.runs.jsonl
