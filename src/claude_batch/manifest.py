@@ -149,6 +149,7 @@ def build_start(spec: RunSpec, run_id: str, var_idx: dict[str, int], n_rows: int
         "run": run_id,
         "started": utc_now(),
         "argv": list(sys.argv[1:]),
+        "resumed_from": spec.resumed_from,
         "cwd": os.getcwd(),
         "host": socket.gethostname(),
         # cwd is not decoration: Claude Code files its session transcripts under

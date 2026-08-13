@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import os
 
 from .checkpoint import default_checkpoint
 from .config import DEFAULT_PRESET, PRESETS, RunSpec, builtin_tasks, load_task, resolve_settings
 from .report import print_status
 from .runner import run_batch
+from .runs import collect, describe, print_runs, select, spec_from
 
 
 def _parse_col(pairs: list[str]) -> dict[str, str]:
@@ -149,6 +151,53 @@ def build_parser() -> argparse.ArgumentParser:
         help="a task name or path: print its template, columns, and sentinel (omit to list all)",
     )
 
+    # --- runs ---------------------------------------------------------------
+    runs_cmd = sub.add_parser("runs", help="list runs started on this machine (unfinished first)")
+    runs_cmd.add_argument(
+        "--all",
+        action="store_true",
+        help="include finished runs, not just the unfinished ones",
+    )
+    runs_cmd.add_argument(
+        "--here",
+        action="store_true",
+        help="only runs whose output lives under the current directory",
+    )
+
+    # --- resume -------------------------------------------------------------
+    resume = sub.add_parser(
+        "resume",
+        help="re-run an unfinished run with its recorded flags (see `runs`)",
+        description=(
+            "Resume a recorded run without retyping its command line. Any flag passed "
+            "here overrides what that run used; everything else is replayed as-is."
+        ),
+    )
+    resume.add_argument(
+        "target",
+        metavar="RUN",
+        nargs="?",
+        default=None,
+        help="a list number from `runs`, a run id (or unique prefix), or the run's OUTPUT path",
+    )
+    resume.add_argument("--all", action="store_true", help="pick from finished runs too")
+    resume.add_argument("--here", action="store_true", help="only consider runs under this directory")
+    resume.add_argument("-m", "--model", default=None, metavar="PRESET|ALIAS", help="override the model")
+    resume.add_argument("-j", "--concurrency", type=_positive_int, default=None, help="override parallelism")
+    resume.add_argument("--pack", type=_positive_int, default=None, metavar="N", help="override packing")
+    resume.add_argument(
+        "-n",
+        "--limit",
+        type=_positive_int,
+        default=None,
+        help="override the row limit (lift a trial run's -n by passing a bigger one)",
+    )
+    resume.add_argument("--max-cost", type=float, default=None, metavar="USD", help="override the budget")
+    resume.add_argument("--stop-on-limit", action="store_true", help="stop on a rate limit this time")
+    resume.add_argument("--dry-run", action="store_true", help="print the prompts instead of running")
+    resume.add_argument("--allow-task-drift", action="store_true", help="see `run --allow-task-drift`")
+    resume.add_argument("--allow-input-drift", action="store_true", help="see `run --allow-input-drift`")
+
     # --- status -------------------------------------------------------------
     status = sub.add_parser("status", help="print checkpoint progress for a run; no API calls")
     status.add_argument(
@@ -231,9 +280,41 @@ def cmd_run(args: argparse.Namespace) -> None:
     run_batch(build_spec(args))
 
 
+def cmd_runs(args: argparse.Namespace) -> None:
+    entries, stale = collect(here=os.getcwd() if args.here else None)
+    # Unfinished first and by default: "what did I leave half-done?" is the
+    # question worth answering without a flag.
+    print_runs([e for e in entries if args.all or not e.done], stale)
+
+
+def cmd_resume(args: argparse.Namespace) -> None:
+    entries, _ = collect(here=os.getcwd() if args.here else None)
+    entry = select([e for e in entries if args.all or not e.done], args.target)
+    spec = spec_from(
+        entry,
+        model=args.model,
+        concurrency=args.concurrency,
+        pack=args.pack,
+        limit=args.limit,
+        max_cost=args.max_cost,
+        stop_on_limit=args.stop_on_limit,
+        dry_run=args.dry_run,
+        allow_task_drift=args.allow_task_drift,
+        allow_input_drift=args.allow_input_drift,
+    )
+    print(describe(spec, entry), flush=True)  # ahead of the runner's stderr log
+    run_batch(spec)
+
+
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    {"run": cmd_run, "tasks": cmd_tasks, "status": cmd_status}[args.cmd](args)
+    {
+        "run": cmd_run,
+        "tasks": cmd_tasks,
+        "status": cmd_status,
+        "runs": cmd_runs,
+        "resume": cmd_resume,
+    }[args.cmd](args)
 
 
 if __name__ == "__main__":

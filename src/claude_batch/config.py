@@ -228,3 +228,5 @@ class RunSpec:
     # the other; both together force a run through anything.
     allow_task_drift: bool = False
     allow_input_drift: bool = False
+    # Set by `resume`: the run id this request was rebuilt from, chaining manifests.
+    resumed_from: str = ""

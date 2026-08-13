@@ -19,9 +19,10 @@ src/claude_batch/      installable package
   checkpoint.py        JSONL checkpoint records + the resume-safety meta stamp
   manifest.py          per-run manifests (what ran, how) + the global run registry
   drift.py             what changed since the last run, and which flag waives it
+  runs.py              listing recorded runs + rebuilding one for `resume`
   report.py            cost/usage accounting + the status report
   runner.py            CSV read -> render -> fan-out -> checkpoint -> output rebuild
-  cli.py               argparse front end (run / tasks / status) -> RunSpec
+  cli.py               argparse front end (run / tasks / status / runs / resume)
   tasks/               built-in tasks (each: <name>.toml + <name>.system.md)
 data/
   example.csv          tiny JP input (col0 sentence with markup, col1 optional EN)
@@ -134,6 +135,8 @@ Edit `src/claude_batch/config.py` to add presets or change the retry policy.
 claude-batch run INPUT OUTPUT --task TASK [flags]   # run a task over a CSV
 claude-batch tasks [TASK]                           # list built-in tasks, or show one
 claude-batch status [OUTPUT] [--checkpoint P]       # progress for a run; no API calls
+claude-batch runs [--all] [--here]                  # every unfinished run on this machine
+claude-batch resume [RUN] [overrides]               # re-run one with its recorded flags
 ```
 
 `claude-batch <command> --help` prints that command's flags. `--version` prints the
@@ -182,6 +185,46 @@ installed version.
   cells (default: strip, so `<b>` goes and `&nbsp;` becomes a space).
 - `--checkpoint` - JSONL progress file (defaults to `<output>.checkpoint.jsonl`).
 - `--allow-task-drift` / `--allow-input-drift` - override a refused resume. See Drift.
+
+### `runs` / `resume`
+
+`runs` lists what this machine has started, unfinished first and unfinished *only*
+unless you pass `--all`:
+
+```
+ #  RUN           STARTED               TASK            MODEL     PROGRESS          STATE
+ 1  1e11e92931a0  2026-08-13T14:10:14Z  jp-translate    sonnet    512/900 (56%)     crashed/running
+ 2  f3e02a51de8a  2026-08-11T09:02:11Z  summarize       haiku     200/200 (100%)    done, 3 err
+```
+
+The unit is the **output**, not the sitting: six resumes of one batch are one
+unfinished job, so they collapse to a single row showing the latest attempt.
+Progress is read from the checkpoint as the list is printed, so a run going in
+another terminal shows live numbers. The registry is global, which is the point -
+a batch you abandoned in another project is exactly the one you forget. `--here`
+narrows to outputs under the current directory. Entries whose files have been
+deleted are skipped and counted as stale rather than pruned.
+
+`resume` replays a recorded run without retyping its command line:
+
+```bash
+claude-batch resume            # pick from a numbered list (needs a terminal)
+claude-batch resume 1          # by list number
+claude-batch resume 1e11e9     # by run id or unique prefix
+claude-batch resume out/x.csv  # by output path
+claude-batch resume 1 -n 1000 -m best   # replay, but override these
+```
+
+Paths are replayed absolute (so it works from any directory) and the column mapping
+is replayed as resolved indices (so a header rename between sittings cannot re-break
+it). Any flag you pass overrides the recorded one; `-m` goes through the same preset
+resolution as `run --model`. The new sitting records `resumed_from` in its manifest
+entry, so the chain stays walkable. Drift is re-checked exactly as on a normal run.
+
+This is ergonomics, not new capability: re-running the identical `run` command has
+always resumed just as well. Note that a trial run capped with `-n 2` counts as
+*done* once those 2 rows finish - it did what it was asked. Lift the cap with
+`claude-batch resume <run> -n 1000`.
 
 ### `tasks` / `status`
 
