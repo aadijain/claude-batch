@@ -4,6 +4,8 @@ Three orthogonal pieces live here:
 - `Settings` : per-run model knobs (model, concurrency, timeout). Pick a `PRESET`
   by name, then overlay CLI flags.
 - `PRESETS`  : named model tiers (max/best/fast/cheap) - WHICH model, not WHAT task.
+  One CLI flag (`--model`) selects either: a preset name picks the whole tier, any
+  other value is a raw claude-code model alias on top of the default tier.
 - `Task`     : a `.toml` file declaring WHAT to do - a prompt template with
   `{var}` placeholders, the output columns, an optional field sentinel, and an
   optional system-prompt file. Built-in tasks ship in `tasks/`; any path works.
@@ -78,10 +80,15 @@ PRESETS: dict[str, Settings] = {
 DEFAULT_PRESET = "fast"
 
 
-def resolve_settings(preset: str | None, **cli_overrides) -> Settings:
-    """Pick the base preset (or default) and overlay any CLI flags."""
-    base = PRESETS[preset or DEFAULT_PRESET]
-    return base.overlay(**cli_overrides)
+def resolve_settings(model: str | None, **cli_overrides) -> Settings:
+    """Resolve `--model` plus the remaining CLI overrides into `Settings`.
+
+    `model` is a preset name (`fast`) to take that whole tier, or any other string
+    (`haiku`, `claude-fable-5`) to run the default tier against that model alias.
+    None keeps the default preset untouched."""
+    if model is None or model in PRESETS:
+        return PRESETS[model or DEFAULT_PRESET].overlay(**cli_overrides)
+    return PRESETS[DEFAULT_PRESET].overlay(model=model, **cli_overrides)
 
 
 # --- Tasks ------------------------------------------------------------------

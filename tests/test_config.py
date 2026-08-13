@@ -25,14 +25,21 @@ def test_settings_default_pack_is_one_row_per_call():
 
 
 def test_cli_overrides_win_over_preset():
-    s = resolve_settings("best", concurrency=4, model="haiku")
+    s = resolve_settings("best", concurrency=4)
     assert s.concurrency == 4
-    assert s.model == "haiku"
+    assert s.model == "opus"
+
+
+def test_non_preset_model_runs_the_default_tier():
+    s = resolve_settings("claude-fable-5")
+    assert s.model == "claude-fable-5"
+    assert s.concurrency == PRESETS[DEFAULT_PRESET].concurrency
+    assert s.call_timeout_s == PRESETS[DEFAULT_PRESET].call_timeout_s
 
 
 def test_none_overrides_are_ignored():
     base = PRESETS["fast"]
-    s = resolve_settings("fast", model=None, concurrency=None)
+    s = resolve_settings("fast", concurrency=None)
     assert s == base
 
 

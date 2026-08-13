@@ -46,7 +46,7 @@ Translate Japanese with optional English context (no header, columns by index):
 
 ```bash
 claude-batch run data/example.csv out/translated.csv \
-  --task jp-translate --col source=0 --col context=1 --preset best
+  --task jp-translate --col source=0 --col context=1 --model best
 ```
 
 Backgrounded (survives terminal close), logging to a file:
@@ -104,7 +104,7 @@ Built-in tasks:
 
 ## Model presets
 
-A preset picks **which model** (orthogonal to the task). Flags override it.
+A preset picks **which model** (orthogonal to the task), and is selected with `--model`.
 
 | Preset | Model | Notes |
 |--------|-------|-------|
@@ -112,6 +112,10 @@ A preset picks **which model** (orthogonal to the task). Flags override it.
 | `best` | opus | Richest output. |
 | `fast` | sonnet | Default. Close 2nd, cheaper/faster. |
 | `cheap` | haiku | Trial / smoke tests. |
+
+Pass a preset name to `--model` (`--model cheap`) to take the whole tier, or any
+other value (`--model haiku`, `--model claude-fable-5`) to run the default tier
+against that claude-code model alias.
 
 Edit `src/claude_batch/config.py` to add presets or change the retry policy.
 
@@ -135,8 +139,9 @@ installed version.
   same-named header if `--col` is omitted. A task with a single template variable run
   over a single-column input needs no `--col` at all (it maps to column 0).
 - `--has-header` - treat the first row as a header.
-- `--preset` - model tier (`max` / `best` / `fast` / `cheap`, default `fast`).
-- `--model` / `--concurrency` - override the preset. Keep concurrency **1-2 on Pro**.
+- `--model` - a preset tier (`max` / `best` / `fast` / `cheap`, default `fast`) or a
+  raw claude-code model alias. See Presets.
+- `--concurrency` - override the preset's parallelism. Keep it **1-2 on Pro**.
 - `--pack N` - pack N rows into each `claude` call (default 1). Each call carries a
   fixed prompt overhead (the Claude Code harness is ~15K input tokens) that dwarfs a
   short row, so packing 10-20 rows per call cuts total input tokens roughly N-fold.

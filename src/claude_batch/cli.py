@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from .config import PRESETS, builtin_tasks, load_task, resolve_settings
+from .config import DEFAULT_PRESET, PRESETS, builtin_tasks, load_task, resolve_settings
 from .report import print_status
 from .runner import run_batch
 
@@ -59,12 +59,14 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--has-header", action="store_true", help="treat the first row as a header")
 
     run.add_argument(
-        "--preset",
-        choices=sorted(PRESETS),
+        "--model",
         default=None,
-        help=f"model tier (default: fast). Available: {', '.join(sorted(PRESETS))}",
+        metavar="PRESET|ALIAS",
+        help=(
+            f"a preset tier ({', '.join(sorted(PRESETS))}; default {DEFAULT_PRESET}) "
+            "or any claude-code model alias to run the default tier against"
+        ),
     )
-    run.add_argument("--model", default=None, help="override the preset's claude-code model alias")
     run.add_argument(
         "--concurrency", type=int, default=None, help="override parallel claude -p calls (1-2 on Pro)"
     )
@@ -164,7 +166,7 @@ def cmd_status(args: argparse.Namespace) -> None:
 
 def cmd_run(args: argparse.Namespace) -> None:
     task = load_task(args.task)
-    settings = resolve_settings(args.preset, model=args.model, concurrency=args.concurrency, pack=args.pack)
+    settings = resolve_settings(args.model, concurrency=args.concurrency, pack=args.pack)
     run_batch(
         input_path=args.input,
         output_path=args.output,
