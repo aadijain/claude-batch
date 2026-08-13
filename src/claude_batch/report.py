@@ -7,6 +7,7 @@ import os
 
 from .checkpoint import default_checkpoint, load_checkpoint, load_meta
 from .client import USAGE_KEYS
+from .manifest import load_runs, manifest_path
 
 # Both the status report and the run summary quote reported API cost; on a
 # subscription plan the CLI reports $0 and tokens are the real spend.
@@ -98,7 +99,7 @@ def print_status(
     print(f"Checkpoint: {checkpoint_path}")
     meta = load_meta(checkpoint_path)
     if meta:
-        print(f"Run:        task={meta.get('task', '?')}, model={meta.get('model', '?')}")
+        print(f"Task:       {meta.get('task', '?')} (checkpoint created with model={meta.get('model', '?')})")
     if total is not None:
         remaining = max(0, total - len(done))
         pct = (len(done) / total * 100) if total else 0.0
@@ -108,3 +109,29 @@ def print_status(
     print(f"Results:    {ok} ok, {errors} errors")
     print(f"Cost:       ${cost:.4f} (reported API cost; {COST_NOTE})")
     print(f"Tokens:     {fmt_tokens(sum_usage(done.values()))}")
+    if output_path:
+        print_run_history(output_path)
+
+
+def print_run_history(output_path: str) -> None:
+    """The sittings behind those rows: when each ran, on what, and how it ended.
+    Read from the run manifest sidecar; silent when there is none (older runs)."""
+    runs = load_runs(output_path)
+    if not runs:
+        return
+    print(f"\nRuns ({manifest_path(output_path)}):")
+    for rec in runs:
+        end = rec.get("end") or {}
+        # No end record means the process never got to write one: it crashed or
+        # was hard-killed. That absence is the signal, so name it plainly.
+        outcome = end.get("outcome", "crashed/running")
+        counts = f"{end['ok']} ok, {end['errors']} err" if end else "-"
+        settings = rec.get("settings") or {}
+        versions = rec.get("versions") or {}
+        pack = settings.get("pack", 1)
+        print(
+            f"  {rec.get('run', '?')}  {rec.get('started', '?')}  "
+            f"model={settings.get('model', '?')}"
+            + (f" pack={pack}" if pack and pack > 1 else "")
+            + f"  claude={versions.get('claude', '?')}  {outcome}  {counts}"
+        )

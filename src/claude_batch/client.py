@@ -56,6 +56,10 @@ class CallResult(NamedTuple):
     text: str
     cost: float
     usage: dict[str, int]
+    # Claude Code's own session id for the call. Its transcript is at
+    # ~/.claude/projects/<escaped-cwd>/<session_id>.jsonl, so a bad row stays
+    # traceable to the exact prompt/response Claude Code logged for it.
+    session_id: str = ""
 
 
 class LimitReached(RuntimeError):
@@ -147,7 +151,7 @@ def call_claude(
         cost = float(data.get("total_cost_usd") or 0.0)
         if is_error or not text:
             _raise_classified(json.dumps(data), data.get("subtype"))
-        return CallResult(text, cost, extract_usage(data))
+        return CallResult(text, cost, extract_usage(data), str(data.get("session_id") or ""))
 
     _raise_classified((stdout + "\n" + stderr).strip() or f"exit {proc.returncode}")
 

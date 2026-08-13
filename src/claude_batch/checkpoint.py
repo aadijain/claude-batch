@@ -132,12 +132,17 @@ def check_drift(meta: dict | None, task: Task, model: str, data_rows: list[list[
     return out
 
 
-def stamp_meta(checkpoint_path: str, task: Task, model: str, data_rows: list[list[str]]) -> None:
-    """Write the binding record a fresh checkpoint is guarded by."""
+def stamp_meta(
+    checkpoint_path: str, task: Task, model: str, data_rows: list[list[str]], run_id: str = ""
+) -> None:
+    """Write the binding record a fresh checkpoint is guarded by. Deliberately
+    minimal: the rich per-run detail lives in the manifest sidecar, but a
+    checkpoint separated from its sidecar must still defend its positional keying."""
     append_checkpoint(
         checkpoint_path,
         {
             "meta": 1,
+            "run": run_id,  # the run that created it; the rest of its story is in the manifest
             "task": task.name,
             "model": model,
             "input_rows": len(data_rows),
@@ -146,12 +151,14 @@ def stamp_meta(checkpoint_path: str, task: Task, model: str, data_rows: list[lis
     )
 
 
-def verify_or_stamp_meta(checkpoint_path: str, task: Task, model: str, data_rows: list[list[str]]) -> None:
+def verify_or_stamp_meta(
+    checkpoint_path: str, task: Task, model: str, data_rows: list[list[str]], run_id: str = ""
+) -> None:
     """Guard the positional keying: refuse to resume a checkpoint against a
     different task or a changed input prefix. First run stamps a meta record."""
     meta = load_meta(checkpoint_path)
     if meta is None:
-        stamp_meta(checkpoint_path, task, model, data_rows)
+        stamp_meta(checkpoint_path, task, model, data_rows, run_id)
         return
     for d in check_drift(meta, task, model, data_rows):
         if d.tier == "note":

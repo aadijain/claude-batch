@@ -116,6 +116,8 @@ class Task:
       column (None for single-column raw output; text format only).
     - `system_prompt_file` : absolute path to a replacement system prompt, or None
       to use claude's default.
+    - `source_path`     : the `.toml` this was loaded from, kept so a run manifest
+      can hash it (a task edited mid-run silently changes what the rows mean).
     """
 
     name: str
@@ -126,6 +128,7 @@ class Task:
     format: str = "text"
     sentinel: str | None = None
     system_prompt_file: str | None = None
+    source_path: str = ""
 
 
 def builtin_tasks() -> dict[str, str]:
@@ -198,6 +201,7 @@ def load_task(spec: str) -> Task:
         format=fmt,
         sentinel=data.get("sentinel"),
         system_prompt_file=sys_prompt,
+        source_path=path,
     )
 
 

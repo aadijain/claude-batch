@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from .checkpoint import append_checkpoint, load_checkpoint, verify_or_stamp_meta
 from .client import USAGE_KEYS, LimitReached, log, run_with_retries, terminate_children
 from .config import PACK_EXTRA_TIMEOUT_PER_ROW_S, RunSpec, Task
+from .manifest import new_run_id, utc_now, write_end, write_start
 from .parse import (
     PACK_SYSTEM_ADDENDUM,
     extract_json,
@@ -31,6 +32,10 @@ from .parse import (
     strip_html as strip_html_tags,
 )
 from .report import COST_NOTE, add_usage, fmt_duration, fmt_tokens, split_usage
+
+# An unparseable response is kept on the error record so it can be inspected later;
+# cap it so one runaway answer cannot bloat the checkpoint.
+MAX_ERROR_RAW = 4000
 
 
 # --- CSV helpers ------------------------------------------------------------
@@ -163,7 +168,11 @@ def run_batch(spec: RunSpec) -> None:
             log(f"Packing: --pack {settings.pack} would send them in {calls} claude call(s).")
         return
 
-    verify_or_stamp_meta(checkpoint_path, task, settings.model, data_rows)
+    # One manifest entry per sitting: this is what makes "why do rows 0-500 read
+    # differently from 500+" answerable months later (see manifest.py).
+    run_id = new_run_id()
+    verify_or_stamp_meta(checkpoint_path, task, settings.model, data_rows, run_id)
+    write_start(spec, run_id, var_idx, len(data_rows))
 
     done = load_checkpoint(checkpoint_path)
     # Errored rows are re-attempted: the checkpoint is append-only and the last
@@ -191,7 +200,12 @@ def run_batch(spec: RunSpec) -> None:
     hard_kill = threading.Event()
 
     def finish_row(rec):
-        """Checkpoint one row's record, update run accounting, print its line."""
+        """Checkpoint one row's record, update run accounting, print its line.
+        The run id and finish time are stamped here so every write site gets them."""
+        rec["run"] = run_id
+        rec.setdefault("session", "")
+        rec.setdefault("raw", "")
+        rec["t"] = utc_now()
         missed_sentinel = bool(
             not rec["error"]
             and task.sentinel
@@ -250,6 +264,12 @@ def run_batch(spec: RunSpec) -> None:
         # One call generates len(chunk) outputs serially; give it timeout headroom
         # to match, so the base stays sized for a single row.
         timeout_s = settings.call_timeout_s + (len(chunk) - 1) * PACK_EXTRA_TIMEOUT_PER_ROW_S
+        call_t0 = time.monotonic()
+
+        def elapsed_ms() -> int:
+            """Wall time of this call. Packed rows share it: they shared the call."""
+            return int((time.monotonic() - call_t0) * 1000)
+
         try:
             res = run_with_retries(
                 prompt,
@@ -276,8 +296,11 @@ def run_batch(spec: RunSpec) -> None:
             msg = str(e)[:300]
             for idx in indices:
                 c0, u0 = carry.get(idx, (0.0, {}))
-                finish_row({"idx": idx, "fields": {}, "cost": c0, "usage": u0, "error": msg})
+                finish_row(
+                    {"idx": idx, "fields": {}, "cost": c0, "usage": u0, "error": msg, "ms": elapsed_ms()}
+                )
             return
+        ms = elapsed_ms()
         per_row: dict[int, str | dict] = {}
         if is_json:
             if len(chunk) == 1:
@@ -319,6 +342,8 @@ def run_batch(spec: RunSpec) -> None:
                     "cost": row_cost,
                     "usage": row_usage,
                     "error": "",
+                    "session": res.session_id,
+                    "ms": ms,
                 }
             )
         if not missing:
@@ -333,7 +358,20 @@ def run_batch(spec: RunSpec) -> None:
                     if is_json and len(chunk) == 1
                     else "pack: row missing from packed response"
                 )
-                finish_row({"idx": idx, "fields": {}, "cost": c0, "usage": u0, "error": err})
+                # Keep the response that failed to parse: an unreadable answer is
+                # exactly the row someone will want to inspect later.
+                finish_row(
+                    {
+                        "idx": idx,
+                        "fields": {},
+                        "raw": res.text[:MAX_ERROR_RAW],
+                        "cost": c0,
+                        "usage": u0,
+                        "error": err,
+                        "session": res.session_id,
+                        "ms": ms,
+                    }
+                )
             return
         sub = max(1, len(chunk) // 2)
         log(
@@ -393,13 +431,28 @@ def run_batch(spec: RunSpec) -> None:
 
     stopped = stop_event.is_set()
     if stats.interrupted:
-        headline = "Interrupted." if not hard_kill.is_set() else "Killed."
+        killed = hard_kill.is_set()
+        headline, outcome = ("Killed.", "killed") if killed else ("Interrupted.", "interrupted")
     elif stopped and stats.stop_reason == "cost":
-        headline = "Stopped at the --max-cost budget."
+        headline, outcome = "Stopped at the --max-cost budget.", "cost"
     elif stopped:
-        headline = "Stopped on rate/usage limit."
+        headline, outcome = "Stopped on rate/usage limit.", "limit"
     else:
-        headline = "Done."
+        headline, outcome = "Done.", "done"
+    # Closing the manifest entry: a start with no end is how a crashed run is
+    # recognised later, so this must be the last thing the run does.
+    mine = [r for r in done.values() if r.get("run") == run_id]
+    run_errors = sum(1 for r in mine if r.get("error"))
+    write_end(
+        output_path,
+        run_id,
+        outcome=outcome,
+        rows_run=len(todo),
+        ok=len(mine) - run_errors,
+        errors=run_errors,
+        cost=stats.total_cost,
+        usage=stats.usage,
+    )
     log(
         f"\n{headline} Wrote {output_path}. "
         f"Completed {len(done) - errors}/{len(work)} rows, {errors} errors. "

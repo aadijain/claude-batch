@@ -17,6 +17,7 @@ src/claude_batch/      installable package
   parse.py             HTML stripping, prompt rendering, output-field splitting
   client.py            the claude -p call (-> CallResult) + rate-limit backoff
   checkpoint.py        JSONL checkpoint records + the resume-safety meta stamp
+  manifest.py          per-run manifests (what ran, how) + the global run registry
   report.py            cost/usage accounting + the status report
   runner.py            CSV read -> render -> fan-out -> checkpoint -> output rebuild
   cli.py               argparse front end (run / tasks / status) -> RunSpec
@@ -188,7 +189,8 @@ installed version.
   cost / tokens) without running anything. Point it at the run's `OUTPUT` CSV, or pass
   `--checkpoint` directly. Read-only, so it is safe against a run in progress in
   another terminal. Pass `-i`/`--input` (plus `--header` / `-n`/`--limit` if the run
-  used them) for a row total.
+  used them) for a row total. It also prints the run history from the manifest: one
+  line per sitting with its id, start time, model, claude version, outcome and counts.
 
 Lean-for-Pro internals (baked in): `--system-prompt-file` replaces the agent harness
 with just the task prompt, `--max-turns 1`, all tools disabled, `--output-format json`.
@@ -196,15 +198,52 @@ with just the task prompt, `--max-turns 1`, all tools disabled, `--output-format
 ## Output
 
 - **Checkpoint** (`<output>.checkpoint.jsonl`) - one JSON record per row
-  (`idx`, `fields`, `raw`, `cost`, `usage` token counts, `error`), written the
-  instant each row finishes. Packed calls split cost and tokens across their rows
-  (tokens as integer shares that sum exactly).
-  **The source of truth for progress** - safe if the run is killed. The first record
-  is a meta stamp (task, model, input row fingerprint) used to refuse a resume
-  against the wrong task or a changed input.
+  (`idx`, `fields`, `raw`, `cost`, `usage` token counts, `error`, plus the forensic
+  trio `run` / `session` / `t` and the call's `ms`), written the instant each row
+  finishes. Packed calls split cost and tokens across their rows (tokens as integer
+  shares that sum exactly), and share one `session` and one `ms` because they shared
+  one call. **The source of truth for progress** - safe if the run is killed. The
+  first record is a minimal meta stamp (creating run, task, input row fingerprint)
+  used to refuse a resume against the wrong task or a changed input.
+- **Run manifest** (`<output>.runs.jsonl`) - see below.
 - **Final CSV** - original columns + the task's `output_columns`, parsed from the
   model response. Rebuilt from the checkpoint on every run, so a partial CSV can be
   regenerated with zero API calls.
+
+## Run manifests (what ran, and how)
+
+The checkpoint answers *which rows are done*. It says nothing about the sitting that
+produced them, so a checkpoint resumed six times over three weeks used to look
+exactly like one done in a single pass. The manifest is the other half:
+
+- **`<output>.runs.jsonl`** - append-only, two records per run sharing a short random
+  `run` id. A **start** record is written before the first call (argv, cwd, hostname,
+  claude / claude-batch / python versions, resolved settings and flags, the task's
+  name + `.toml` sha256 + system-prompt sha256, the input's sha256 + row count +
+  resolved column map) and an **end** record when the run finishes (outcome, ok/error
+  counts, cost, tokens). Append-only rather than rewritten in place, so *a start with
+  no end* is itself the record that a run was killed - something a `kill -9` would
+  erase from any file the process tried to update.
+- **Global registry** (`${XDG_STATE_HOME:-~/.local/state}/claude-batch/runs.jsonl`) -
+  one line per run start, pointing back at the sidecar, so runs can be listed across
+  projects without scanning the disk. A cache, not truth: it can be rebuilt from the
+  sidecars, and best-effort to write (an unwritable state dir never fails a batch).
+  Set `CLAUDE_BATCH_STATE_DIR` to relocate it.
+
+Per-row records stay small: they carry only the `run` id (which sitting) and the
+`session` id (Claude Code's own transcript, at
+`~/.claude/projects/<escaped-cwd>/<session_id>.jsonl` - which is why `cwd` is in the
+manifest). Everything else dereferences through the manifest. So a suspicious row in
+the output CSV is traceable end to end:
+
+```bash
+grep '"idx": 612' out/x.csv.checkpoint.jsonl | jq '{run, session, t, error}'
+grep '<run-id>' out/x.csv.runs.jsonl | jq .          # argv, versions, hashes
+```
+
+Note that Claude Code prunes its own session logs (`cleanupPeriodDays`, default 30),
+so the `session` id is a live debugging aid for about a month; the manifest itself
+keeps its value indefinitely. `--dry-run` writes neither file.
 
 ## Pause / resume / kill
 
