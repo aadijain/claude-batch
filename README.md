@@ -18,6 +18,7 @@ src/claude_batch/      installable package
   client.py            the claude -p call (-> CallResult) + rate-limit backoff
   checkpoint.py        JSONL checkpoint records + the resume-safety meta stamp
   manifest.py          per-run manifests (what ran, how) + the global run registry
+  drift.py             what changed since the last run, and which flag waives it
   report.py            cost/usage accounting + the status report
   runner.py            CSV read -> render -> fan-out -> checkpoint -> output rebuild
   cli.py               argparse front end (run / tasks / status) -> RunSpec
@@ -180,6 +181,7 @@ installed version.
 - `--strip-html` / `--no-strip-html` - strip HTML tags and decode entities in input
   cells (default: strip, so `<b>` goes and `&nbsp;` becomes a space).
 - `--checkpoint` - JSONL progress file (defaults to `<output>.checkpoint.jsonl`).
+- `--allow-task-drift` / `--allow-input-drift` - override a refused resume. See Drift.
 
 ### `tasks` / `status`
 
@@ -271,12 +273,36 @@ Pass `--stop-on-limit` to opt out of the backoff: the run stops cleanly on the f
 limit, leaving the remaining rows untouched in the checkpoint. Re-run the exact same
 command later (once your window has reset) to resume from where it stopped.
 
+## Drift
+
+A checkpoint only means something next to the input, task and prompt that produced
+it. When one of those moves under a resume, the rows already on disk stop matching
+the rows about to be written. Every run compares itself against the last one (task
+`.toml` sha, system-prompt sha, input fingerprint, model, pack, claude version) and
+grades what it finds by **what an override would risk**:
+
+| Tier | What changed | Default | Waived by |
+|------|--------------|---------|-----------|
+| note | model, `--pack`, claude / claude-batch version | printed, runs on | - |
+| task | the task `.toml` or its system prompt | **aborts** | `--allow-task-drift` |
+| input | input rows edited, reordered, or removed | **aborts** | `--allow-input-drift` |
+
+Task drift is messy but survivable: rows before and after the edit answer different
+prompts, yet every row is still a real answer to a real prompt. Input drift is a
+different animal, which is why it has a separate flag rather than a shared "force":
+rows are keyed by **position**, so a reordered input pairs stored answers with the
+wrong rows and the output CSV lies quietly. Appending rows is always fine.
+
+Neither flag implies the other; pass both to force through anything. Whatever is
+waved through is written to that run's manifest entry as `overrides`, so a forced
+run stays visible in `claude-batch status` long after the terminal is gone.
+
 ## Gotchas
 
 - **Do NOT reshuffle the input between runs.** The checkpoint keys rows by their
   **position in the input file**; reshuffling desyncs the resume mapping. The meta
   stamp catches this: a resume against a different task, or an input whose existing
-  rows changed, is refused (appending new rows is fine).
+  rows changed, is refused (appending new rows is fine). See Drift.
 - Use a distinct `OUTPUT` (and thus default checkpoint) per task/model so one run's
   checkpoint doesn't short-circuit another.
 

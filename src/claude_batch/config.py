@@ -224,3 +224,7 @@ class RunSpec:
     stop_on_limit: bool = False
     dry_run: bool = False
     max_cost: float | None = None
+    # Drift overrides, graded by what they risk (see drift.py). Neither implies
+    # the other; both together force a run through anything.
+    allow_task_drift: bool = False
+    allow_input_drift: bool = False

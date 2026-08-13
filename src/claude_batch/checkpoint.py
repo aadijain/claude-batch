@@ -7,9 +7,7 @@ import json
 import os
 import threading
 from contextlib import nullcontext
-from dataclasses import dataclass
 
-from .client import log
 from .config import Task
 
 
@@ -70,68 +68,6 @@ def rows_fingerprint(data_rows: list[list[str]], n: int) -> str:
     return h.hexdigest()
 
 
-@dataclass(frozen=True)
-class Drift:
-    """One difference between how this run is configured and how the checkpoint was
-    created. `tier` decides what happens: "note" is printed, anything else aborts
-    unless the matching --allow-*-drift flag is passed. `kind` is the stable id
-    that flag machinery and the run manifest record."""
-
-    kind: str
-    tier: str  # "input" (positional corruption) | "task" (semantics) | "note"
-    message: str
-
-
-def check_drift(meta: dict | None, task: Task, model: str, data_rows: list[list[str]]) -> list[Drift]:
-    """Compare this run against the checkpoint's meta stamp. Pure: returns what
-    differs and lets the caller decide which differences are fatal."""
-    if meta is None:
-        return []
-    out: list[Drift] = []
-
-    if meta.get("task") and meta["task"] != task.name:
-        out.append(
-            Drift(
-                "task_name",
-                "task",
-                f"checkpoint was created by task '{meta['task']}', not '{task.name}'",
-            )
-        )
-
-    n = meta.get("input_rows")
-    want = meta.get("rows_sha256")
-    if isinstance(n, int) and want:
-        if len(data_rows) < n:
-            out.append(
-                Drift(
-                    "input_shrunk",
-                    "input",
-                    f"input has {len(data_rows)} rows but the checkpoint was created against {n}; "
-                    f"rows are keyed by position, so a shrunk input cannot be verified",
-                )
-            )
-        elif rows_fingerprint(data_rows, n) != want:
-            out.append(
-                Drift(
-                    "input_rows",
-                    "input",
-                    "input rows changed since the checkpoint was created (rows are keyed by "
-                    "position, so edits/reordering would mix results); appending rows is fine",
-                )
-            )
-
-    if meta.get("model") and meta["model"] != model:
-        out.append(
-            Drift(
-                "model",
-                "note",
-                f"checkpoint was started with model={meta['model']}, resuming with model={model}; "
-                f"completed rows keep the old model's output",
-            )
-        )
-    return out
-
-
 def stamp_meta(
     checkpoint_path: str, task: Task, model: str, data_rows: list[list[str]], run_id: str = ""
 ) -> None:
@@ -149,22 +85,3 @@ def stamp_meta(
             "rows_sha256": rows_fingerprint(data_rows, len(data_rows)),
         },
     )
-
-
-def verify_or_stamp_meta(
-    checkpoint_path: str, task: Task, model: str, data_rows: list[list[str]], run_id: str = ""
-) -> None:
-    """Guard the positional keying: refuse to resume a checkpoint against a
-    different task or a changed input prefix. First run stamps a meta record."""
-    meta = load_meta(checkpoint_path)
-    if meta is None:
-        stamp_meta(checkpoint_path, task, model, data_rows, run_id)
-        return
-    for d in check_drift(meta, task, model, data_rows):
-        if d.tier == "note":
-            log(f"note: {d.message}.")
-        else:
-            raise SystemExit(
-                f"{d.message.capitalize()} ({checkpoint_path}). Use a different "
-                f"--output/--checkpoint, or delete the checkpoint to start over."
-            )

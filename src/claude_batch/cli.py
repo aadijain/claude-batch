@@ -122,6 +122,22 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--checkpoint", default=None, help="JSONL checkpoint path (default: <output>.checkpoint.jsonl)"
     )
+    run.add_argument(
+        "--allow-task-drift",
+        action="store_true",
+        help=(
+            "resume even though the task .toml or its system prompt changed since the last run "
+            "(rows before and after will answer different prompts; recorded in the manifest)"
+        ),
+    )
+    run.add_argument(
+        "--allow-input-drift",
+        action="store_true",
+        help=(
+            "resume even though the input rows changed. DANGEROUS: rows are keyed by position, "
+            "so a reordered input pairs stored answers with the wrong rows"
+        ),
+    )
 
     # --- tasks --------------------------------------------------------------
     tasks = sub.add_parser("tasks", help="list built-in tasks, or show one in full")
@@ -206,6 +222,8 @@ def build_spec(args: argparse.Namespace) -> RunSpec:
         stop_on_limit=args.stop_on_limit,
         dry_run=args.dry_run,
         max_cost=args.max_cost,
+        allow_task_drift=args.allow_task_drift,
+        allow_input_drift=args.allow_input_drift,
     )
 
 

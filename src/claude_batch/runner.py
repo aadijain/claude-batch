@@ -10,10 +10,11 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from .checkpoint import append_checkpoint, load_checkpoint, verify_or_stamp_meta
+from .checkpoint import append_checkpoint, load_checkpoint, load_meta, stamp_meta
 from .client import USAGE_KEYS, LimitReached, log, run_with_retries, terminate_children
 from .config import PACK_EXTRA_TIMEOUT_PER_ROW_S, RunSpec, Task
-from .manifest import new_run_id, utc_now, write_end, write_start
+from .drift import check_drift, enforce
+from .manifest import last_run, new_run_id, utc_now, write_end, write_start
 from .parse import (
     PACK_SYSTEM_ADDENDUM,
     extract_json,
@@ -171,8 +172,13 @@ def run_batch(spec: RunSpec) -> None:
     # One manifest entry per sitting: this is what makes "why do rows 0-500 read
     # differently from 500+" answerable months later (see manifest.py).
     run_id = new_run_id()
-    verify_or_stamp_meta(checkpoint_path, task, settings.model, data_rows, run_id)
-    write_start(spec, run_id, var_idx, len(data_rows))
+    meta = load_meta(checkpoint_path)
+    # Guard the positional keying and the prompt's stability before writing a
+    # single row; forced-through findings are recorded with the run.
+    overrides = enforce(check_drift(spec, meta, last_run(output_path), data_rows), spec, checkpoint_path)
+    if meta is None:
+        stamp_meta(checkpoint_path, task, settings.model, data_rows, run_id)
+    write_start(spec, run_id, var_idx, len(data_rows), overrides=overrides)
 
     done = load_checkpoint(checkpoint_path)
     # Errored rows are re-attempted: the checkpoint is append-only and the last
