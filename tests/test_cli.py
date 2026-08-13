@@ -59,3 +59,42 @@ def test_parse_col():
     assert _parse_col(["source=0", "context=jp"]) == {"source": "0", "context": "jp"}
     with pytest.raises(SystemExit):
         _parse_col(["nosign"])
+
+
+def test_short_flags_and_boolean_optionals_parse():
+    from claude_batch.cli import build_parser
+
+    args = build_parser().parse_args(
+        [
+            "run",
+            "in.csv",
+            "out.csv",
+            "-t",
+            "jp-translate",
+            "-c",
+            "source=0",
+            "-m",
+            "cheap",
+            "-n",
+            "5",
+            "-j",
+            "1",
+            "--header",
+            "--no-strip-html",
+        ]
+    )
+    assert (args.task, args.col, args.model, args.limit, args.concurrency) == (
+        "jp-translate",
+        ["source=0"],
+        "cheap",
+        5,
+        1,
+    )
+    assert args.header is True and args.strip_html is False
+
+
+def test_html_defaults_to_stripped():
+    from claude_batch.cli import build_parser
+
+    args = build_parser().parse_args(["run", "in.csv", "out.csv", "-t", "jp-translate"])
+    assert args.strip_html is True and args.header is False

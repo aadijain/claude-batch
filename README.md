@@ -46,14 +46,14 @@ Translate Japanese with optional English context (no header, columns by index):
 
 ```bash
 claude-batch run data/example.csv out/translated.csv \
-  --task jp-translate --col source=0 --col context=1 --model best
+  -t jp-translate -c source=0 -c context=1 -m best
 ```
 
 Backgrounded (survives terminal close), logging to a file:
 
 ```bash
 nohup claude-batch run data/example.csv out/translated.csv \
-  --task jp-translate --col source=0 --col context=1 \
+  -t jp-translate -c source=0 -c context=1 \
   > run.log 2>&1 &
 ```
 
@@ -133,15 +133,15 @@ installed version.
 ### `run` flags
 
 - `INPUT` / `OUTPUT` (positional) - input CSV / final output CSV.
-- `--task` - built-in task name (see `claude-batch tasks`) or a path to a task `.toml`.
-- `--col VAR=COL` - map a task template variable to a CSV column (0-based index, or
-  header name with `--has-header`). Repeatable. A variable also falls back to a
+- `-t`, `--task` - built-in task name (see `claude-batch tasks`) or a path to a task `.toml`.
+- `-c`, `--col VAR=COL` - map a task template variable to a CSV column (0-based index, or
+  header name with `--header`). Repeatable. A variable also falls back to a
   same-named header if `--col` is omitted. A task with a single template variable run
   over a single-column input needs no `--col` at all (it maps to column 0).
-- `--has-header` - treat the first row as a header.
-- `--model` - a preset tier (`max` / `best` / `fast` / `cheap`, default `fast`) or a
+- `--header` / `--no-header` - treat the first row as a header (default: no header).
+- `-m`, `--model` - a preset tier (`max` / `best` / `fast` / `cheap`, default `fast`) or a
   raw claude-code model alias. See Presets.
-- `--concurrency` - override the preset's parallelism. Keep it **1-2 on Pro**.
+- `-j`, `--concurrency` - override the preset's parallelism. Keep it **1-2 on Pro**.
 - `--pack N` - pack N rows into each `claude` call (default 1). Each call carries a
   fixed prompt overhead (the Claude Code harness is ~15K input tokens) that dwarfs a
   short row, so packing 10-20 rows per call cuts total input tokens roughly N-fold.
@@ -156,8 +156,8 @@ installed version.
   no per-row marker for the model to lose. The per-call timeout automatically
   gains headroom per packed row
   (`PACK_EXTRA_TIMEOUT_PER_ROW_S` in `config.py`, since one call answers N rows
-  serially). Start with `--pack 10 --limit 20 --dry-run` to preview the packed calls.
-- `--limit N` - process only the first N rows (trial runs).
+  serially). Start with `--pack 10 -n 20 --dry-run` to preview the packed calls.
+- `-n`, `--limit N` - process only the first N rows (trial runs).
 - `--dry-run` - print the rendered prompt for every row in scope (and whether it
   would run, is already checkpointed, or is skipped as empty), then exit. Nothing is
   called or written; use it to debug a template or a `--col` mapping for free.
@@ -165,7 +165,8 @@ installed version.
   backing off (re-run the same command later to resume). See Rate-limit behavior.
 - `--max-cost USD` - stop submitting new rows once this run's reported API cost
   reaches the budget (in-flight rows finish and checkpoint; re-run to resume).
-- `--keep-html` - keep HTML tags in input cells (default: strip `<b>`, decode `&nbsp;`).
+- `--strip-html` / `--no-strip-html` - strip HTML tags and decode entities in input
+  cells (default: strip, so `<b>` goes and `&nbsp;` becomes a space).
 - `--checkpoint` - JSONL progress file (defaults to `<output>.checkpoint.jsonl`).
 
 ### `tasks` / `status`
@@ -175,8 +176,8 @@ installed version.
 - `claude-batch status OUTPUT` prints checkpoint progress (done / remaining / errors /
   cost / tokens) without running anything. Point it at the run's `OUTPUT` CSV, or pass
   `--checkpoint` directly. Read-only, so it is safe against a run in progress in
-  another terminal. Pass `--input` (plus `--has-header` / `--limit` if the run used
-  them) for a row total.
+  another terminal. Pass `-i`/`--input` (plus `--header` / `-n`/`--limit` if the run
+  used them) for a row total.
 
 Lean-for-Pro internals (baked in): `--system-prompt-file` replaces the agent harness
 with just the task prompt, `--max-turns 1`, all tools disabled, `--output-format json`.

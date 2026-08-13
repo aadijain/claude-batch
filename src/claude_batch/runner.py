@@ -25,8 +25,10 @@ from .parse import (
     split_fields,
     split_packed,
     split_packed_json,
-    strip_html,
     template_vars,
+)
+from .parse import (
+    strip_html as strip_html_tags,
 )
 from .report import COST_NOTE, add_usage, fmt_duration, fmt_tokens, split_usage
 
@@ -100,7 +102,7 @@ def run_batch(
     settings: Settings,
     has_header: bool = False,
     limit: int | None = None,
-    keep_html: bool = False,
+    strip_html: bool = True,
     checkpoint_path: str | None = None,
     stop_on_limit: bool = False,
     dry_run: bool = False,
@@ -125,7 +127,7 @@ def run_batch(
 
     def cell(row: list[str], idx: int) -> str:
         val = row[idx].strip() if idx < len(row) else ""
-        return val if keep_html else strip_html(val)
+        return strip_html_tags(val) if strip_html else val
 
     def runnable(prompt: str, has_input: bool) -> bool:
         """A row is real work only if its primary input and rendered prompt are non-empty."""

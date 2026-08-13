@@ -48,17 +48,24 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="run a task over an input CSV")
     run.add_argument("input", metavar="INPUT", help="input CSV path")
     run.add_argument("output", metavar="OUTPUT", help="output CSV path")
-    run.add_argument("--task", required=True, help="built-in task name or path to a task .toml")
+    run.add_argument("-t", "--task", required=True, help="built-in task name or path to a task .toml")
     run.add_argument(
+        "-c",
         "--col",
         action="append",
         default=[],
         metavar="VAR=COL",
         help="map a task template variable to a CSV column (0-based index or header name); repeatable",
     )
-    run.add_argument("--has-header", action="store_true", help="treat the first row as a header")
+    run.add_argument(
+        "--header",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="treat the first row as a header (default: --no-header)",
+    )
 
     run.add_argument(
+        "-m",
         "--model",
         default=None,
         metavar="PRESET|ALIAS",
@@ -68,7 +75,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     run.add_argument(
-        "--concurrency", type=int, default=None, help="override parallel claude -p calls (1-2 on Pro)"
+        "-j",
+        "--concurrency",
+        type=_positive_int,
+        default=None,
+        help="override parallel claude -p calls (1-2 on Pro)",
     )
     run.add_argument(
         "--pack",
@@ -78,7 +89,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="pack N rows into each claude call to amortize the per-call prompt overhead (default 1)",
     )
 
-    run.add_argument("--limit", type=_positive_int, default=None, help="process at most N rows (trial runs)")
+    run.add_argument(
+        "-n", "--limit", type=_positive_int, default=None, help="process at most N rows (trial runs)"
+    )
     run.add_argument(
         "--dry-run",
         action="store_true",
@@ -97,7 +110,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="stop submitting new rows once this run's reported API cost reaches USD",
     )
     run.add_argument(
-        "--keep-html", action="store_true", help="keep HTML tags in input cells (default: strip)"
+        "--strip-html",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="strip HTML tags and decode entities in input cells (default: --strip-html)",
     )
     run.add_argument(
         "--checkpoint", default=None, help="JSONL checkpoint path (default: <output>.checkpoint.jsonl)"
@@ -123,9 +139,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="the run's output CSV (its checkpoint is derived from it)",
     )
     status.add_argument("--checkpoint", default=None, help="checkpoint path, instead of OUTPUT")
-    status.add_argument("--input", default=None, help="the run's input CSV, for a row total")
-    status.add_argument("--has-header", action="store_true", help="the input CSV has a header row")
-    status.add_argument("--limit", type=int, default=None, help="the run's --limit, for a row total")
+    status.add_argument("-i", "--input", default=None, help="the run's input CSV, for a row total")
+    status.add_argument(
+        "--header",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="the run's input CSV has a header row",
+    )
+    status.add_argument(
+        "-n", "--limit", type=_positive_int, default=None, help="the run's --limit, for a row total"
+    )
 
     return ap
 
@@ -159,7 +182,7 @@ def cmd_status(args: argparse.Namespace) -> None:
         output_path=args.output,
         checkpoint_path=args.checkpoint,
         input_path=args.input,
-        has_header=args.has_header,
+        has_header=args.header,
         limit=args.limit,
     )
 
@@ -173,9 +196,9 @@ def cmd_run(args: argparse.Namespace) -> None:
         task=task,
         col_map=_parse_col(args.col),
         settings=settings,
-        has_header=args.has_header,
+        has_header=args.header,
         limit=args.limit,
-        keep_html=args.keep_html,
+        strip_html=args.strip_html,
         checkpoint_path=args.checkpoint,
         stop_on_limit=args.stop_on_limit,
         dry_run=args.dry_run,
