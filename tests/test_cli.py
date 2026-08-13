@@ -98,3 +98,8 @@ def test_html_defaults_to_stripped():
 
     args = build_parser().parse_args(["run", "in.csv", "out.csv", "-t", "jp-translate"])
     assert args.strip_html is True and args.header is False
+
+
+def test_parse_col_comma_separated():
+    assert _parse_col(["source=0,context=1"]) == {"source": "0", "context": "1"}
+    assert _parse_col(["a=0", "b=1,c=hdr"]) == {"a": "0", "b": "1", "c": "hdr"}

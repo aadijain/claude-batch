@@ -101,3 +101,21 @@ def test_load_json_task_row_column_reserved(tmp_path):
     body = 'prompt_template = "{source}"\noutput_columns = ["row"]\nformat = "json"\n'
     with pytest.raises(SystemExit):
         load_task(_write_task(tmp_path, body))
+
+
+def test_task_columns_default_mapping(tmp_path):
+    body = 'prompt_template = "{a} {b}"\noutput_columns = ["out"]\n[columns]\na = 0\nb = "hdr"\n'
+    task = load_task(_write_task(tmp_path, body))
+    assert task.columns == {"a": "0", "b": "hdr"}
+
+
+def test_task_columns_absent_by_default():
+    assert load_task("jp-translate").columns == {"source": "0", "context": "1"}
+
+
+def test_task_columns_unknown_var_raises(tmp_path):
+    import pytest
+
+    body = 'prompt_template = "{a}"\noutput_columns = ["out"]\n[columns]\nnope = 0\n'
+    with pytest.raises(SystemExit):
+        load_task(_write_task(tmp_path, body))

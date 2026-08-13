@@ -10,15 +10,14 @@ from .runner import run_batch
 
 
 def _parse_col(pairs: list[str]) -> dict[str, str]:
-    """Turn repeated --col var=spec into {var: spec}."""
+    """Turn repeated -c/--col values into {var: spec}. Each value is one or more
+    comma-separated `var=column` pairs, so `-c a=0,b=1` == `-c a=0 -c b=1`."""
     out: dict[str, str] = {}
-    for p in pairs:
-        if "=" not in p:
-            raise SystemExit(f"--col expects var=column, got '{p}'.")
-        var, _, spec = p.partition("=")
+    for item in (part for p in pairs for part in p.split(",")):
+        var, sep, spec = item.partition("=")
         var = var.strip()
-        if not var:
-            raise SystemExit(f"--col expects var=column, got '{p}'.")
+        if not sep or not var:
+            raise SystemExit(f"--col expects var=column pairs, got '{item}'.")
         out[var] = spec.strip()
     return out
 
@@ -55,7 +54,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="VAR=COL",
-        help="map a task template variable to a CSV column (0-based index or header name); repeatable",
+        help=(
+            "map a task template variable to a CSV column (0-based index or header name); "
+            "repeatable, and comma-separated pairs are accepted. Overrides the task's "
+            "own [columns] defaults"
+        ),
     )
     run.add_argument(
         "--header",

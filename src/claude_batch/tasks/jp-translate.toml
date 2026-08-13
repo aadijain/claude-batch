@@ -15,3 +15,9 @@ output_columns = ["translation", "notes"]
 sentinel = "---NOTES---"
 
 system_prompt_file = "jp-translate.system.md"
+
+# Default input layout (matches data/example.csv), overridden by any -c/--col flag.
+# Keep this table LAST: in TOML every key after a [table] header belongs to it.
+[columns]
+source = 0
+context = 1

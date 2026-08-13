@@ -42,19 +42,18 @@ List the built-in tasks:
 claude-batch tasks
 ```
 
-Translate Japanese with optional English context (no header, columns by index):
+Translate Japanese with optional English context. The shipped task declares its own
+input layout, so no column mapping is needed:
 
 ```bash
-claude-batch run data/example.csv out/translated.csv \
-  -t jp-translate -c source=0 -c context=1 -m best
+claude-batch run data/example.csv out/translated.csv -t jp-translate -m best
 ```
 
 Backgrounded (survives terminal close), logging to a file:
 
 ```bash
 nohup claude-batch run data/example.csv out/translated.csv \
-  -t jp-translate -c source=0 -c context=1 \
-  > run.log 2>&1 &
+  -t jp-translate > run.log 2>&1 &
 ```
 
 ## Tasks
@@ -65,7 +64,7 @@ A task lives in `src/claude_batch/tasks/<name>.toml`. The shipped `jp-translate`
 name = "jp-translate"
 description = "Translate a Japanese sentence closely for a learner, plus learner notes."
 
-# Per-row user prompt. {var} placeholders are mapped to CSV columns with --col.
+# Per-row user prompt. {var} placeholders are mapped to CSV columns (see [columns]).
 # A template line whose placeholders ALL resolve empty is dropped (optional context).
 prompt_template = """
 Translate this line: {source}
@@ -81,6 +80,14 @@ sentinel = "---NOTES---"
 
 # Optional replacement system prompt (relative to this file). Omit to use the default.
 system_prompt_file = "jp-translate.system.md"
+
+# Optional default input layout: which CSV column feeds each {var}, by 0-based index
+# or header name. LOWEST precedence - a -c/--col flag or a same-named header in the
+# input both win over it. Keep this table LAST in the file: in TOML, every key after
+# a [table] header belongs to that table.
+[columns]
+source = 0
+context = 1
 ```
 
 To add a task, drop a `.toml` (plus an optional `.system.md`) into `tasks/`, or point
@@ -134,10 +141,14 @@ installed version.
 
 - `INPUT` / `OUTPUT` (positional) - input CSV / final output CSV.
 - `-t`, `--task` - built-in task name (see `claude-batch tasks`) or a path to a task `.toml`.
-- `-c`, `--col VAR=COL` - map a task template variable to a CSV column (0-based index, or
-  header name with `--header`). Repeatable. A variable also falls back to a
-  same-named header if `--col` is omitted. A task with a single template variable run
-  over a single-column input needs no `--col` at all (it maps to column 0).
+- `-c`, `--col VAR=COL` - map a task template variable to a CSV column (0-based index,
+  or header name with `--header`). Repeatable, and comma-separated pairs work too
+  (`-c source=0,context=1`). Resolution order per variable: this flag, then a
+  same-named header in the input, then the task's `[columns]` table. A task with a
+  single template variable run over a single-column input needs no mapping at all (it
+  maps to column 0). The header outranks `[columns]` deliberately: a task shipped for
+  one CSV shape must not silently mis-map a differently shaped input that names its
+  columns.
 - `--header` / `--no-header` - treat the first row as a header (default: no header).
 - `-m`, `--model` - a preset tier (`max` / `best` / `fast` / `cheap`, default `fast`) or a
   raw claude-code model alias. See Presets.

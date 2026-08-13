@@ -53,10 +53,14 @@ def resolve_col(spec: str, header: list[str] | None, ncols: int | None = None) -
 def resolve_col_map(
     task: Task, col_map: dict[str, str], header: list[str] | None, ncols: int | None = None
 ) -> dict[str, int]:
-    """Map each template variable to a 0-based input column index. A var may be set
-    explicitly via --col; otherwise it falls back to a same-named header. As a final
-    convenience, a task with exactly one template var run over a single-column input
-    (`ncols == 1`) maps that var to column 0, so trivial tasks need no --col."""
+    """Map each template variable to a 0-based input column index. Precedence:
+    an explicit --col, then a same-named header in the actual input, then the task's
+    own [columns] default. The header outranks the task because a header is evidence
+    from the data at hand, while [columns] is a guess the task made in advance - a
+    task shipped for one CSV shape must not silently mis-map a differently shaped one
+    that names its columns. As a final convenience, a task with exactly one template
+    var run over a single-column input (`ncols == 1`) maps that var to column 0, so
+    trivial tasks need no --col."""
     vars_ = template_vars(task.prompt_template)
     resolved: dict[str, int] = {}
     missing: list[str] = []
@@ -64,6 +68,8 @@ def resolve_col_map(
         spec = col_map.get(var)
         if spec is None and header and var in header:
             spec = var
+        if spec is None:
+            spec = task.columns.get(var)
         if spec is None:
             if len(vars_) == 1 and ncols == 1:
                 resolved[var] = 0
@@ -74,7 +80,7 @@ def resolve_col_map(
     if missing:
         raise SystemExit(
             f"Task '{task.name}' needs a column for: {', '.join(missing)}. "
-            f"Pass --col {missing[0]}=<index-or-header>."
+            f"Pass -c {missing[0]}=<index-or-header>."
         )
     return resolved
 

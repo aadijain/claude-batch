@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+
+from .parse import template_vars
 
 # --- Paths ------------------------------------------------------------------
 PKG_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -99,6 +101,10 @@ class Task:
     - `prompt_template` : per-row user prompt with `{var}` placeholders. Each var
       is mapped to a CSV column at runtime (see runner). A template line whose
       placeholders all resolve empty is dropped (optional-context columns).
+    - `columns`         : optional default `{var: column}` mapping, so a task that
+      knows its usual input layout needs no `--col` on the command line. Lowest
+      precedence: a `--col` flag or a same-named header in the input both win over it
+      (see `runner.resolve_col_map`).
     - `output_columns`  : names of the columns parsed out of the model response.
     - `format`          : "text" (default) parses the raw response, splitting on
       the sentinel; "json" asks for a JSON object keyed by the output columns
@@ -113,6 +119,7 @@ class Task:
     description: str
     prompt_template: str
     output_columns: tuple[str, ...]
+    columns: dict[str, str] = field(default_factory=dict)
     format: str = "text"
     sentinel: str | None = None
     system_prompt_file: str | None = None
@@ -149,6 +156,17 @@ def load_task(spec: str) -> Task:
     if sys_prompt and not os.path.exists(sys_prompt):
         raise SystemExit(f"Task '{spec}' system_prompt_file not found: {sys_prompt}")
 
+    declared = data.get("columns", {})
+    if not isinstance(declared, dict):
+        raise SystemExit(f"Task '{spec}' [columns] must be a table of var = column entries.")
+    tvars = template_vars(data["prompt_template"])
+    unknown = [v for v in declared if v not in tvars]
+    if unknown:
+        raise SystemExit(
+            f"Task '{spec}' [columns] names variables absent from prompt_template: "
+            f"{', '.join(sorted(unknown))}. Known: {', '.join(sorted(tvars)) or '(none)'}."
+        )
+
     cols = tuple(data["output_columns"])
     if not cols:
         raise SystemExit(f"Task '{spec}' must declare at least one output column.")
@@ -173,6 +191,7 @@ def load_task(spec: str) -> Task:
         description=data.get("description", ""),
         prompt_template=data["prompt_template"],
         output_columns=cols,
+        columns={k: str(v) for k, v in declared.items()},
         format=fmt,
         sentinel=data.get("sentinel"),
         system_prompt_file=sys_prompt,

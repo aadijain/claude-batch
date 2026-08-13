@@ -87,6 +87,42 @@ def _run(tmp_path, monkeypatch, fake, rows, checkpoint_text=None, **kw):
         return list(csv.reader(f)), load_checkpoint(str(ckpt))
 
 
+def test_col_flag_overrides_task_columns():
+    from claude_batch.config import Task
+    from claude_batch.runner import resolve_col_map
+
+    task = Task(
+        name="t",
+        description="",
+        prompt_template="{a} {b}",
+        output_columns=("out",),
+        columns={"a": "0", "b": "1"},
+    )
+    assert resolve_col_map(task, {}, None, 3) == {"a": 0, "b": 1}
+    assert resolve_col_map(task, {"b": "2"}, None, 3) == {"a": 0, "b": 2}
+
+
+def test_header_names_outrank_task_columns():
+    """A task shipped for one CSV shape must not silently mis-map a differently
+    shaped input that names its columns (the jp-translate / key,source,context case)."""
+    from claude_batch.config import Task
+    from claude_batch.runner import resolve_col_map
+
+    task = Task(
+        name="t",
+        description="",
+        prompt_template="{a} {b}",
+        output_columns=("out",),
+        columns={"a": "0", "b": "1"},
+    )
+    # Input is key,a,b: the task's 0/1 guess would grab "key" and "a".
+    assert resolve_col_map(task, {}, ["key", "a", "b"], 3) == {"a": 1, "b": 2}
+    # --col still wins over both.
+    assert resolve_col_map(task, {"a": "0"}, ["key", "a", "b"], 3) == {"a": 0, "b": 2}
+    # A header that names none of the vars falls back to the task defaults.
+    assert resolve_col_map(task, {}, ["x", "y", "z"], 3) == {"a": 0, "b": 1}
+
+
 def test_run_batch_retries_errored_rows(tmp_path, monkeypatch):
     # Row 0 succeeded previously, row 1 errored: a re-run retries only row 1.
     called = []
