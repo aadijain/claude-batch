@@ -4,9 +4,21 @@ import pytest
 
 from claude_batch import runner
 from claude_batch.checkpoint import load_checkpoint
+from claude_batch.client import CallResult
 from claude_batch.config import Settings, Task
 from claude_batch.report import print_status
 from claude_batch.runner import resolve_col, resolve_col_map, run_batch
+
+
+def _as_result(fake):
+    """Adapt a test fake that returns a plain (text, cost, usage) tuple into the
+    CallResult the runner expects, so fakes stay terse."""
+
+    def wrapped(*a, **k):
+        out = fake(*a, **k)
+        return out if isinstance(out, CallResult) else CallResult(*out)
+
+    return wrapped
 
 
 def _task(template, cols=("out",)):
@@ -74,7 +86,7 @@ def _run(tmp_path, monkeypatch, fake, rows, checkpoint_text=None, **kw):
     ckpt = tmp_path / "out.csv.checkpoint.jsonl"
     if checkpoint_text is not None:
         ckpt.write_text(checkpoint_text, encoding="utf-8")
-    monkeypatch.setattr(runner, "run_with_retries", fake)
+    monkeypatch.setattr(runner, "run_with_retries", _as_result(fake))
     run_batch(
         input_path=str(inp),
         output_path=str(out),
@@ -224,7 +236,7 @@ def test_run_batch_dry_run_calls_nothing_and_writes_nothing(tmp_path, monkeypatc
     inp = tmp_path / "in.csv"
     with open(inp, "w", newline="", encoding="utf-8") as f:
         csv.writer(f).writerows([["a"], [""]])
-    monkeypatch.setattr(runner, "run_with_retries", fake)
+    monkeypatch.setattr(runner, "run_with_retries", _as_result(fake))
     run_batch(
         input_path=str(inp),
         output_path=str(tmp_path / "out.csv"),

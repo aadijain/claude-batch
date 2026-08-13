@@ -9,7 +9,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import NoReturn
+from typing import NamedTuple, NoReturn
 
 from . import config
 
@@ -49,6 +49,15 @@ def extract_usage(data: dict) -> dict[str, int]:
     return {k: int(u.get(k) or 0) for k in USAGE_KEYS}
 
 
+class CallResult(NamedTuple):
+    """One completed `claude -p` call. A named tuple rather than a bare tuple so the
+    per-call forensics can grow without churning every call site."""
+
+    text: str
+    cost: float
+    usage: dict[str, int]
+
+
 class LimitReached(RuntimeError):
     """A rate/usage limit was hit while `--stop-on-limit` is set: stop instead of
     backing off, so the run can be resumed manually later from the checkpoint."""
@@ -76,9 +85,9 @@ def call_claude(
     model: str,
     timeout_s: int,
     append_system_prompt: str | None = None,
-) -> tuple[str, float, dict[str, int]]:
-    """Run one claude -p invocation. Returns (result_text, cost_usd, usage_tokens).
-    Raises RuntimeError('limit:...') for rate/usage limits, RuntimeError('error:...')
+) -> CallResult:
+    """Run one claude -p invocation. Returns the result text with its reported cost
+    and token usage. Raises RuntimeError('limit:...') for rate/usage limits, RuntimeError('error:...')
     for everything else, so the caller can pick the right backoff."""
     # The prompt goes over stdin (claude -p reads it when the positional is
     # omitted): argv would leak row text into `ps` and can overflow ARG_MAX.
@@ -138,7 +147,7 @@ def call_claude(
         cost = float(data.get("total_cost_usd") or 0.0)
         if is_error or not text:
             _raise_classified(json.dumps(data), data.get("subtype"))
-        return text, cost, extract_usage(data)
+        return CallResult(text, cost, extract_usage(data))
 
     _raise_classified((stdout + "\n" + stderr).strip() or f"exit {proc.returncode}")
 
@@ -150,7 +159,7 @@ def run_with_retries(
     timeout_s: int,
     stop_on_limit: bool = False,
     append_system_prompt: str | None = None,
-) -> tuple[str, float, dict[str, int]]:
+) -> CallResult:
     general = 0
     limit = 0
     while True:

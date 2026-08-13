@@ -39,9 +39,9 @@ def _fake_popen(monkeypatch, proc):
 def test_call_claude_success_and_stdin_prompt(monkeypatch):
     proc = FakeProc(stdout=json.dumps({"result": "hello", "total_cost_usd": 0.01}))
     _fake_popen(monkeypatch, proc)
-    text, cost, usage = call_claude("the prompt", None, "haiku", 5)
-    assert (text, cost) == ("hello", 0.01)
-    assert usage["input_tokens"] == 0  # no usage block in the payload -> zeros
+    res = call_claude("the prompt", None, "haiku", 5)
+    assert (res.text, res.cost) == ("hello", 0.01)
+    assert res.usage["input_tokens"] == 0  # no usage block in the payload -> zeros
     # The prompt must travel over stdin, never argv (ps exposure / ARG_MAX).
     assert proc.input == "the prompt"
 
@@ -59,7 +59,7 @@ def test_call_claude_parses_usage(monkeypatch):
         },
     }
     _fake_popen(monkeypatch, FakeProc(stdout=json.dumps(payload)))
-    _, _, usage = call_claude("p", None, "haiku", 5)
+    usage = call_claude("p", None, "haiku", 5).usage
     assert usage == {
         "input_tokens": 10,
         "output_tokens": 20,

@@ -259,7 +259,7 @@ def run_batch(
         # to match, so the base stays sized for a single row.
         timeout_s = settings.call_timeout_s + (len(chunk) - 1) * PACK_EXTRA_TIMEOUT_PER_ROW_S
         try:
-            text, cost, usage = run_with_retries(
+            res = run_with_retries(
                 prompt,
                 task.system_prompt_file,
                 settings.model,
@@ -289,17 +289,17 @@ def run_batch(
         per_row: dict[int, str | dict] = {}
         if is_json:
             if len(chunk) == 1:
-                obj = extract_json(text)
+                obj = extract_json(res.text)
                 if isinstance(obj, dict):
                     per_row[indices[0]] = obj
             else:
-                per_row.update(split_packed_json(text, indices))
+                per_row.update(split_packed_json(res.text, indices))
         elif len(chunk) == 1:
-            per_row[indices[0]] = text
+            per_row[indices[0]] = res.text
         else:
-            per_row.update(split_packed(text, indices))
-        share = cost / len(chunk)
-        usage_shares = split_usage(usage, len(chunk))
+            per_row.update(split_packed(res.text, indices))
+        share = res.cost / len(chunk)
+        usage_shares = split_usage(res.usage, len(chunk))
         missing: list[int] = []
         for pos, idx in enumerate(indices):
             c0, u0 = carry.get(idx, (0.0, {}))
