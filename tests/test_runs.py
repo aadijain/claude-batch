@@ -1,4 +1,5 @@
 import csv
+import os
 
 import pytest
 
@@ -76,7 +77,8 @@ def test_collect_lists_newest_first_and_skips_stale(tmp_path, monkeypatch):
 
 def test_collect_here_filters_by_directory(tmp_path, monkeypatch):
     _run(tmp_path, monkeypatch)
-    assert collect(here=str(tmp_path))[0]
+    assert collect(here=str(tmp_path))[0]  # matched on the output path
+    assert collect(here=os.getcwd())[0]  # matched on where it was launched from
     assert collect(here=str(tmp_path / "elsewhere"))[0] == []
 
 

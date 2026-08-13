@@ -22,6 +22,11 @@ from .config import RunSpec, Settings, load_task, resolve_settings
 from .manifest import load_runs, read_jsonl, registry_path
 
 
+def _under(path: str, directory: str) -> bool:
+    root = os.path.abspath(directory)
+    return bool(path) and (os.path.abspath(path) + os.sep).startswith(root + os.sep)
+
+
 @dataclass(frozen=True)
 class RunEntry:
     """One resumable job: the latest run recorded for a given output."""
@@ -62,7 +67,9 @@ def collect(here: str | None = None) -> tuple[list[RunEntry], int]:
         if not os.path.exists(rec.get("checkpoint") or ""):
             stale += 1
             continue
-        if here and not os.path.abspath(out).startswith(os.path.abspath(here) + os.sep):
+        # "here" means either the output or the directory it was launched from: a
+        # run started in this project but writing to /tmp is still this project's.
+        if here and not any(_under(p, here) for p in (out, rec.get("cwd") or "")):
             continue
         seen[out] = rec  # later lines win: one row per output, newest run
 
