@@ -1,11 +1,14 @@
 """Tunable defaults, named model presets, and the pluggable task loader.
 
-Three orthogonal pieces live here:
+Four pieces live here:
 - `Settings` : per-run model knobs (model, concurrency, timeout). Pick a `PRESET`
   by name, then overlay CLI flags.
 - `PRESETS`  : named model tiers (max/best/fast/cheap) - WHICH model, not WHAT task.
   One CLI flag (`--model`) selects either: a preset name picks the whole tier, any
   other value is a raw claude-code model alias on top of the default tier.
+- `RunSpec`  : everything one `run` invocation was asked to do (paths + task +
+  settings + flags), built by the CLI and consumed by the runner. One object so
+  the run manifest can serialize the request instead of re-listing its fields.
 - `Task`     : a `.toml` file declaring WHAT to do - a prompt template with
   `{var}` placeholders, the output columns, an optional field sentinel, and an
   optional system-prompt file. Built-in tasks ship in `tasks/`; any path works.
@@ -196,3 +199,24 @@ def load_task(spec: str) -> Task:
         sentinel=data.get("sentinel"),
         system_prompt_file=sys_prompt,
     )
+
+
+# --- One run's full request -------------------------------------------------
+@dataclass(frozen=True)
+class RunSpec:
+    """A fully resolved `run` request: what to run, over what, how. The CLI builds
+    it (paths already defaulted, `--col` already parsed), the runner executes it,
+    and the run manifest writes it down so `resume` can rebuild the same request."""
+
+    input_path: str
+    output_path: str
+    checkpoint_path: str
+    task: Task
+    settings: Settings
+    col_map: dict[str, str] = field(default_factory=dict)
+    has_header: bool = False
+    limit: int | None = None
+    strip_html: bool = True
+    stop_on_limit: bool = False
+    dry_run: bool = False
+    max_cost: float | None = None

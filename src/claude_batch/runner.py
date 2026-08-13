@@ -10,9 +10,9 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from .checkpoint import append_checkpoint, default_checkpoint, load_checkpoint, verify_or_stamp_meta
+from .checkpoint import append_checkpoint, load_checkpoint, verify_or_stamp_meta
 from .client import USAGE_KEYS, LimitReached, log, run_with_retries, terminate_children
-from .config import PACK_EXTRA_TIMEOUT_PER_ROW_S, Settings, Task
+from .config import PACK_EXTRA_TIMEOUT_PER_ROW_S, RunSpec, Task
 from .parse import (
     PACK_SYSTEM_ADDENDUM,
     extract_json,
@@ -99,41 +99,33 @@ class RunStats:
         self.interrupted = False  # first Ctrl-C: drain. second: hard kill.
 
 
-def run_batch(
-    *,
-    input_path: str,
-    output_path: str,
-    task: Task,
-    col_map: dict[str, str],
-    settings: Settings,
-    has_header: bool = False,
-    limit: int | None = None,
-    strip_html: bool = True,
-    checkpoint_path: str | None = None,
-    stop_on_limit: bool = False,
-    dry_run: bool = False,
-    max_cost: float | None = None,
-) -> None:
-    """Run `task` over `input_path` row by row and write `output_path`. Resumable
-    via the JSONL checkpoint, which is the durable source of truth for progress."""
-    checkpoint_path = checkpoint_path or default_checkpoint(output_path)
+def run_batch(spec: RunSpec) -> None:
+    """Run `spec.task` over `spec.input_path` row by row and write the output CSV.
+    Resumable via the JSONL checkpoint, the durable source of truth for progress."""
+    # Local aliases for the hot fields; the spec itself stays the single record of
+    # what this run was asked to do (and is what the manifest serializes).
+    task, settings = spec.task, spec.settings
+    input_path, output_path = spec.input_path, spec.output_path
+    checkpoint_path = spec.checkpoint_path
+    limit, max_cost = spec.limit, spec.max_cost
+    stop_on_limit = spec.stop_on_limit
 
     with open(input_path, newline="", encoding="utf-8") as f:
         rows = list(csv.reader(f))
     if not rows:
         raise SystemExit("Input CSV is empty.")
 
-    header = rows[0] if has_header else None
-    data_rows = rows[1:] if has_header else rows
+    header = rows[0] if spec.has_header else None
+    data_rows = rows[1:] if spec.has_header else rows
 
     # Width of the input: a "single-column" file has exactly one field in every row.
-    ncols = max((len(r) for r in (rows if has_header else data_rows)), default=0)
-    var_idx = resolve_col_map(task, col_map, header, ncols)
+    ncols = max((len(r) for r in (rows if spec.has_header else data_rows)), default=0)
+    var_idx = resolve_col_map(task, spec.col_map, header, ncols)
     primary = next(iter(var_idx.values()), None)  # row counts as work if this col is non-empty
 
     def cell(row: list[str], idx: int) -> str:
         val = row[idx].strip() if idx < len(row) else ""
-        return strip_html_tags(val) if strip_html else val
+        return strip_html_tags(val) if spec.strip_html else val
 
     def runnable(prompt: str, has_input: bool) -> bool:
         """A row is real work only if its primary input and rendered prompt are non-empty."""
@@ -146,7 +138,7 @@ def run_batch(
         has_input = primary is None or (primary < len(row) and row[primary].strip())
         work.append((i, render_prompt(task.prompt_template, values), bool(has_input)))
 
-    if dry_run:
+    if spec.dry_run:
         # Read-only preview: print each rendered prompt and what would happen.
         # Nothing is called, and the checkpoint is neither created nor stamped.
         done = load_checkpoint(checkpoint_path)

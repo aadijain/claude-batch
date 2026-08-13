@@ -5,7 +5,7 @@ import pytest
 from claude_batch import runner
 from claude_batch.checkpoint import load_checkpoint
 from claude_batch.client import CallResult
-from claude_batch.config import Settings, Task
+from claude_batch.config import RunSpec, Settings, Task
 from claude_batch.report import print_status
 from claude_batch.runner import resolve_col, resolve_col_map, run_batch
 
@@ -88,12 +88,14 @@ def _run(tmp_path, monkeypatch, fake, rows, checkpoint_text=None, **kw):
         ckpt.write_text(checkpoint_text, encoding="utf-8")
     monkeypatch.setattr(runner, "run_with_retries", _as_result(fake))
     run_batch(
-        input_path=str(inp),
-        output_path=str(out),
-        task=kw.pop("task", _task("{source}")),
-        col_map={},
-        settings=kw.pop("settings", Settings(model="haiku", concurrency=1)),
-        **kw,
+        RunSpec(
+            input_path=str(inp),
+            output_path=str(out),
+            checkpoint_path=str(ckpt),
+            task=kw.pop("task", _task("{source}")),
+            settings=kw.pop("settings", Settings(model="haiku", concurrency=1)),
+            **kw,
+        )
     )
     with open(out, newline="", encoding="utf-8") as f:
         return list(csv.reader(f)), load_checkpoint(str(ckpt))
@@ -238,12 +240,14 @@ def test_run_batch_dry_run_calls_nothing_and_writes_nothing(tmp_path, monkeypatc
         csv.writer(f).writerows([["a"], [""]])
     monkeypatch.setattr(runner, "run_with_retries", _as_result(fake))
     run_batch(
-        input_path=str(inp),
-        output_path=str(tmp_path / "out.csv"),
-        task=_task("{source}"),
-        col_map={},
-        settings=Settings(model="haiku", concurrency=1),
-        dry_run=True,
+        RunSpec(
+            input_path=str(inp),
+            output_path=str(tmp_path / "out.csv"),
+            checkpoint_path=str(tmp_path / "out.csv.checkpoint.jsonl"),
+            task=_task("{source}"),
+            settings=Settings(model="haiku", concurrency=1),
+            dry_run=True,
+        )
     )
     out = capsys.readouterr().out
     assert "row 0: would run" in out and "row 1: skip (empty input)" in out

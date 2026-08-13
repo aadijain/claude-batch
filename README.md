@@ -13,13 +13,13 @@ concurrency, CSV rebuild - is completely task-agnostic.
 
 ```
 src/claude_batch/      installable package
-  config.py            model PRESETS, Settings, the Task loader (tomllib)
+  config.py            model PRESETS, Settings, RunSpec, the Task loader (tomllib)
   parse.py             HTML stripping, prompt rendering, output-field splitting
   client.py            the claude -p call (-> CallResult) + rate-limit backoff
   checkpoint.py        JSONL checkpoint records + the resume-safety meta stamp
   report.py            cost/usage accounting + the status report
   runner.py            CSV read -> render -> fan-out -> checkpoint -> output rebuild
-  cli.py               argparse front end (run / tasks / status subcommands)
+  cli.py               argparse front end (run / tasks / status) -> RunSpec
   tasks/               built-in tasks (each: <name>.toml + <name>.system.md)
 data/
   example.csv          tiny JP input (col0 sentence with markup, col1 optional EN)

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import argparse
 
-from .config import DEFAULT_PRESET, PRESETS, builtin_tasks, load_task, resolve_settings
+from .checkpoint import default_checkpoint
+from .config import DEFAULT_PRESET, PRESETS, RunSpec, builtin_tasks, load_task, resolve_settings
 from .report import print_status
 from .runner import run_batch
 
@@ -190,23 +191,26 @@ def cmd_status(args: argparse.Namespace) -> None:
     )
 
 
-def cmd_run(args: argparse.Namespace) -> None:
-    task = load_task(args.task)
-    settings = resolve_settings(args.model, concurrency=args.concurrency, pack=args.pack)
-    run_batch(
+def build_spec(args: argparse.Namespace) -> RunSpec:
+    """Resolve a parsed `run` command line into the RunSpec the runner executes."""
+    return RunSpec(
         input_path=args.input,
         output_path=args.output,
-        task=task,
+        checkpoint_path=args.checkpoint or default_checkpoint(args.output),
+        task=load_task(args.task),
+        settings=resolve_settings(args.model, concurrency=args.concurrency, pack=args.pack),
         col_map=_parse_col(args.col),
-        settings=settings,
         has_header=args.header,
         limit=args.limit,
         strip_html=args.strip_html,
-        checkpoint_path=args.checkpoint,
         stop_on_limit=args.stop_on_limit,
         dry_run=args.dry_run,
         max_cost=args.max_cost,
     )
+
+
+def cmd_run(args: argparse.Namespace) -> None:
+    run_batch(build_spec(args))
 
 
 def main(argv: list[str] | None = None) -> None:
